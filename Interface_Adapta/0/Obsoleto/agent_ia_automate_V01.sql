@@ -1,4 +1,4 @@
-﻿-- # agent_ia_automate.sql
+﻿
 -- This script creates the complete database for the AI agent project.
 -- Run it in psql connected to the 'postgres' database (or equivalent superuser DB).
 
