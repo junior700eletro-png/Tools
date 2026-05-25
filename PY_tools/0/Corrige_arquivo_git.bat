@@ -5,10 +5,10 @@ REM Caminho para o Python (ajuste se necessario: python, py, etc.)
 set PYTHON_EXEC=python
 
 REM Diretorio base do repositorio clonado
-set BASE_DIR=C:\repos\Ecosistema-Tools
+set BASE_DIR=C:\Users\user\Desktop\Tools
 
 REM Caminho para o script Python
-set SCRIPT_PATH=%BASE_DIR%\replace_from_clipboard_git.py
+set SCRIPT_PATH=%BASE_DIR%\PY_tools\0\substituir_clipboard_git.py
 
 echo.
 echo Verificando/instalando dependencias (pyperclip e gitpython)...

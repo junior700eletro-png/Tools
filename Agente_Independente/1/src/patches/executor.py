@@ -1,49 +1,68 @@
-﻿# Arquivo: executor.py
-# Caminho: Agente_Independente / src / patches / executor.py
-# Propósito: Orquestrar execução de patches via Fix_File_v2.ps1
+﻿# executor.py
+from __future__ import annotations
 
-import os
-import shutil
-import json
-import subprocess
-import pyperclip
-from datetime import datetime
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any
+import difflib
+
+
+@dataclass
+class ExecutionResult:
+    success: bool
+    message: str
+    file_path: str = ""
+    backup_path: str = ""
+    diff_text: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 class PatchExecutor:
-    def validate_patch_structure(self, patch):
-        required_keys = ["target_file", "new_content"]
-        if not isinstance(patch, dict):
-            raise ValueError("Patch must be a dictionary")
-        if not all(key in patch for key in required_keys):
-            raise ValueError(f"Patch missing required keys: {required_keys}")
-        target_file = patch["target_file"]
-        if not isinstance(target_file, str) or not os.path.isfile(target_file):
-            raise ValueError("target_file must be a valid existing file path")
-        if not isinstance(patch["new_content"], str):
-            raise ValueError("new_content must be a string")
+    def __init__(self, backup_suffix: str = ".bak") -> None:
+        self.backup_suffix = backup_suffix
 
-    def _copy_to_clipboard(self, content):
-        pyperclip.copy(content)
+    def apply_text_replacement(self, file_path: str | Path, old_text: str, new_text: str) -> ExecutionResult:
+        path = Path(file_path)
 
-    def create_backup(self, file_path, backup_dir):
-        os.makedirs(backup_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = os.path.basename(file_path)
-        backup_name = f"{os.path.splitext(base_name)[0]}.backup_{timestamp}{os.path.splitext(base_name)[1]}"
-        backup_path = os.path.join(backup_dir, backup_name)
-        shutil.copy2(file_path, backup_path)
+        if not path.exists():
+            return ExecutionResult(False, "Arquivo nao encontrado.", str(path))
 
-    def apply_patch(self, patch, backup_dir):
-        self.validate_patch_structure(patch)
-        target_file = patch["target_file"]
-        self.create_backup(target_file, backup_dir)
-        patch_json = json.dumps(patch)
-        self._copy_to_clipboard(patch_json)
-        ps1_path = "Fix_File_v2.ps1"
-        subprocess.run(
-            ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", ps1_path],
-            check=True,
-            capture_output=True
+        original = path.read_text(encoding="utf-8")
+        if old_text not in original:
+            return ExecutionResult(False, "Trecho original nao encontrado no arquivo.", str(path))
+
+        backup_path = path.with_suffix(path.suffix + self.backup_suffix)
+        backup_path.write_text(original, encoding="utf-8")
+
+        updated = original.replace(old_text, new_text, 1)
+        path.write_text(updated, encoding="utf-8")
+
+        diff = "\n".join(
+            difflib.unified_diff(
+                original.splitlines(),
+                updated.splitlines(),
+                fromfile=str(path),
+                tofile=str(path),
+                lineterm="",
+            )
         )
 
+        return ExecutionResult(
+            success=True,
+            message="Patch aplicado com sucesso.",
+            file_path=str(path),
+            backup_path=str(backup_path),
+            diff_text=diff,
+        )
+
+    def restore_backup(self, file_path: str | Path, backup_path: str | Path) -> ExecutionResult:
+        path = Path(file_path)
+        backup = Path(backup_path)
+
+        if not backup.exists():
+            return ExecutionResult(False, "Backup nao encontrado.", str(path), str(backup))
+
+        path.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
+        return ExecutionResult(True, "Backup restaurado com sucesso.", str(path), str(backup))
