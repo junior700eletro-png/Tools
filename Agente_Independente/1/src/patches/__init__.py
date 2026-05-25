@@ -1,8 +1,4 @@
-﻿# Arquivo: __init__.py
-# Caminho: Agente_Independente / src / patches / __init__.py
-# Propósito: Exportar classe PatchExecutor para o agente
+﻿# __init__.py
+from .executor import PatchExecutor, ExecutionResult
 
-from .executor import PatchExecutor
-
-__all__ = ['PatchExecutor']
-
+__all__ = ["PatchExecutor", "ExecutionResult"]
