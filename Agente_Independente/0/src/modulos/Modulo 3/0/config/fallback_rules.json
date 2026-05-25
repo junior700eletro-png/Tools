@@ -1,0 +1,13 @@
+﻿# fallback_rules.json path: modulo 3/0/config/fallback_rules.json
+{
+ "rules": [
+   {
+     "match_error": "No handler",
+     "fallback_to": "core_adapter"
+   },
+   {
+     "match_type": "expert",
+     "fallback_to": "skill_adapter"
+   }
+ ]
+}

@@ -1,0 +1,4 @@
+{
+    "nivel_log": "INFO",
+    "template_dir": "./src/templates"
+}

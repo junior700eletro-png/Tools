@@ -1,0 +1,181 @@
+﻿Add-Type -AssemblyName System.Windows.Forms
+
+function Select-RestoreFolder {
+    param(
+        [string]$Description = "Selecione onde restaurar o projeto",
+        [string]$InitialPath = ""
+    )
+
+    $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dialog.Description = $Description
+    $dialog.RootFolder  = "MyComputer"
+    if (-not [string]::IsNullOrWhiteSpace($InitialPath) -and (Test-Path $InitialPath)) {
+        $dialog.SelectedPath = $InitialPath
+    }
+
+    $result = $dialog.ShowDialog()
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+        return $dialog.SelectedPath
+    } else {
+        throw "Operacao cancelada pelo usuario na selecao da pasta de destino."
+    }
+}
+
+function Show-BootstrapMenu {
+    param([string]$bootstrapRoot)
+
+    Write-Host ""
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host "SELECIONE O ARQUIVO BOOTSTRAP" -ForegroundColor Yellow
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Procurando em: $bootstrapRoot" -ForegroundColor Green
+    Write-Host ""
+
+    $bootstrapFiles = @(Get-ChildItem -Path $bootstrapRoot -Filter "bootstrap_*.json" -ErrorAction SilentlyContinue)
+    if ($bootstrapFiles.Count -eq 0) {
+        Write-Host "Nenhum arquivo bootstrap encontrado!" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Opcoes:" -ForegroundColor Yellow
+        Write-Host "  [1] Digitar caminho completo do arquivo" -ForegroundColor Cyan
+        Write-Host "  [2] Cancelar" -ForegroundColor Cyan
+        Write-Host ""
+        $choice = Read-Host "Escolha uma opcao"
+        if ($choice -eq "1") {
+            $customPath = (Read-Host "Digite o caminho completo do arquivo bootstrap").Trim()
+            if (Test-Path $customPath) {
+                return $customPath
+            }
+            else {
+                throw "Arquivo nao encontrado: $customPath"
+            }
+        }
+        else {
+            throw "Operacao cancelada."
+        }
+    }
+
+    $counter = 1
+    foreach ($file in $bootstrapFiles) {
+        $size = [math]::Round($file.Length / 1MB, 2)
+        $date = $file.LastWriteTime.ToString("dd/MM/yyyy HH:mm:ss")
+        Write-Host "  [$counter] $($file.Name) ($size MB) - $date" -ForegroundColor Cyan
+        $counter++
+    }
+
+    Write-Host ""
+    Write-Host "Pressione ENTER sem digitar nada para cancelar." -ForegroundColor Yellow
+    $rawChoice = Read-Host "Escolha uma opcao (numero)"
+
+    # ENTER vazio = cancelar
+    if ([string]::IsNullOrWhiteSpace($rawChoice)) {
+        throw "Operacao cancelada pelo usuario."
+    }
+
+    $rawChoice = $rawChoice.Trim()
+    $idx = 0
+    if (-not [int]::TryParse($rawChoice, [ref]$idx)) {
+        Write-Host "Opcao invalida (nao eh numero)!" -ForegroundColor Red
+        return Show-BootstrapMenu $bootstrapRoot
+    }
+
+    if ($idx -ge 1 -and $idx -le $bootstrapFiles.Count) {
+        return $bootstrapFiles[$idx - 1].FullName
+    }
+    else {
+        Write-Host "Opcao invalida (fora do intervalo 1-$($bootstrapFiles.Count))!" -ForegroundColor Red
+        return Show-BootstrapMenu $bootstrapRoot
+    }
+}
+
+$ErrorActionPreference = "Continue"
+
+try {
+    Write-Host ""
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host "RESTORE - Restauracao Generica de Projeto" -ForegroundColor Yellow
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host ""
+
+    # Pasta fixa onde ficam os bootstraps
+    $bootstrapRoot = "C:\Users\user\AppData\Local\estruturas_JSON"
+    Write-Host "Pasta de bootstraps: $bootstrapRoot" -ForegroundColor Green
+    Write-Host ""
+
+    $bootstrapFile = Show-BootstrapMenu $bootstrapRoot
+
+    Write-Host ""
+    Write-Host "Lendo arquivo bootstrap..." -ForegroundColor Yellow
+    $jsonContent = Get-Content $bootstrapFile -Raw -Encoding UTF8
+    $projectData = $jsonContent | ConvertFrom-Json
+
+    Write-Host "Projeto: $($projectData.project_name)" -ForegroundColor Green
+    Write-Host "Versao: $($projectData.version)" -ForegroundColor Green
+    Write-Host "Data original: $($projectData.created_date)" -ForegroundColor Green
+    Write-Host "Arquivos: $($projectData.files.Count)" -ForegroundColor Green
+    Write-Host "Pastas: $($projectData.folders.Count)" -ForegroundColor Green
+    Write-Host ""
+
+    # Escolher pasta de saída via Windows Forms
+    Write-Host "Selecione a pasta onde o projeto sera restaurado (dialogo grafico)..." -ForegroundColor Yellow
+    $restoreRoot = Select-RestoreFolder -Description "Selecione onde restaurar o projeto" -InitialPath ([Environment]::GetFolderPath("Desktop"))
+    Write-Host ""
+    Write-Host "Restaurando em: $restoreRoot" -ForegroundColor Green
+    Write-Host ""
+
+    $projectFolder = Join-Path $restoreRoot "$($projectData.project_name)_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    New-Item -Path $projectFolder -ItemType Directory -Force | Out-Null
+    Write-Host "Pasta criada: $projectFolder" -ForegroundColor Green
+    Write-Host ""
+
+    Write-Host "Criando estrutura de pastas..." -ForegroundColor Yellow
+    foreach ($folder in $projectData.folders) {
+        $folderPath = Join-Path $projectFolder $folder
+        if (-not (Test-Path $folderPath)) {
+            New-Item -Path $folderPath -ItemType Directory -Force | Out-Null
+            Write-Host "  OK - $folder" -ForegroundColor Green
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Restaurando arquivos..." -ForegroundColor Yellow
+    $fileCount = 0
+
+    foreach ($file in $projectData.files) {
+        $filePath = Join-Path $projectFolder $file.path
+        $fileDir = Split-Path $filePath
+        if (-not (Test-Path $fileDir)) {
+            New-Item -Path $fileDir -ItemType Directory -Force | Out-Null
+        }
+        try {
+            [System.IO.File]::WriteAllText($filePath, $file.content, [System.Text.Encoding]::UTF8)
+            $fileCount++
+            Write-Host "  OK - $($file.path)" -ForegroundColor Green
+        }
+        catch {
+            Write-Host "  ERRO - $($file.path) (nao conseguiu escrever)" -ForegroundColor Red
+        }
+    }
+
+    Write-Host ""
+    Write-Host "Resumo da restauracao:" -ForegroundColor Cyan
+    Write-Host "  Arquivos restaurados: $fileCount" -ForegroundColor Green
+    Write-Host "  Pastas criadas: $($projectData.folders.Count)" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host "OK - Projeto restaurado com sucesso!" -ForegroundColor Green
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Pasta do projeto: $projectFolder" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Pressione ENTER para sair..."
+    Read-Host
+}
+catch {
+    Write-Host ""
+    Write-Host "ERRO: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Pressione ENTER para sair..."
+    Read-Host
+    exit 1
+}

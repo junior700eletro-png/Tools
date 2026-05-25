@@ -1,0 +1,19 @@
+﻿// orchestrator_config.json path: modulo 3/0/config/orchestrator_config.json
+{
+    "orchestrator": {
+        "max_retries": 3,
+        "timeout_seconds": 30,
+        "default_adapter": "core",
+        "logging": {
+            "level": "INFO",
+            "directory": "logs"
+        },
+        "handlers": {
+            "cli": {"enabled": true, "prefix": "cli"},
+            "rpa": {"enabled": true, "prefix": "rpa"},
+            "core": {"enabled": true, "prefix": "core"},
+            "expert": {"enabled": true, "prefix": "expert"},
+            "skill": {"enabled": true, "prefix": "skill"}
+        }
+    }
+}

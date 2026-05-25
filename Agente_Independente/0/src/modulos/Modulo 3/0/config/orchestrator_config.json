@@ -1,0 +1,10 @@
+﻿# orchestrator_config.json path: modulo 3/0/config/orchestrator_config.json
+{
+ "routes": {
+   "cli": "cli_adapter",
+   "rpa": "rpa_adapter",
+   "core": "core_adapter",
+   "expert": "expert_adapter",
+   "skill": "skill_adapter"
+ }
+}

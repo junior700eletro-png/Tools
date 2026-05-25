@@ -1,0 +1,7 @@
+{
+    "politica": "default",
+    "regras": [
+        {"condicao": "contexto.valido", "acao": "analisar"},
+        {"condicao": "contexto.invalido", "acao": "solicitar_correcao"}
+    ]
+}

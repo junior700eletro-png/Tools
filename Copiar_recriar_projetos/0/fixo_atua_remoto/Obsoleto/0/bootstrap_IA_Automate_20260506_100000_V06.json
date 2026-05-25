@@ -1,0 +1,27 @@
+﻿{
+  "created_date": "2026-05-06 10:00:00",
+  "version": "1.0.0",
+  "project_name": "IA_Automate",
+  "description": "Plataforma Multimodal de Automacao Inteligente com IA",
+  "author": "Adapta ONE",
+  "license": "MIT",
+  "status": "Development",
+  "files": [
+    {
+      "path": "README.md",
+      "content": "# README.md\n# IA_Automate - Plataforma Multimodal de Automacao Inteligente\n\nIA_Automate eh uma plataforma de automacao inteligente que integra voz, visao computacional e captura de tela em um sistema unificado.\n\n## Visao Geral\n\nDesenvolvida com Python (Backend), JavaScript (Frontend) e PowerShell (Orquestracao).\n\n## Caracteristicas Principais\n\n- Multimodal: Processa voz, visao e tela simultaneamente\n- API REST: Backend Flask com endpoints estruturados\n- Interface Web: Frontend responsivo em HTML/JS\n- Automacao: Execucao de comandos via protocolo @#$-\n- Testes: 12/12 testes passando (100% sucesso)\n- Modo Desenvolvimento: Pronto para extensao\n- Estrutura Enterprise: Organizacao profissional de pastas\n\n## Arquitetura\n\n### Estrutura de Modulos\n\n- navegador/: Frontend Web (HTML/JS)\n- system/: Backend Python (Flask)\n- communication_system/: Orquestrador (Python/PowerShell)\n- docs/: Documentacao\n- master_orchestrator.bat: Inicializador\n\n## Inicio Rapido\n\n### Pre-requisitos\n\n- Windows 10/11\n- Python 3.8+\n- PowerShell 5.0+\n\n### Instalacao\n\ngit clone https://github.com/seu-usuario/IA_Automate.git\ncd IA_Automate\npip install -r requirements.txt\n\n### Execucao\n\nOpcao 1: Automatico (Recomendado)\nmaster_orchestrator.bat\n\nIsso iniciara automaticamente:\n1. Navegador (Frontend) - aguarda 25s\n2. System (Backend) - aguarda 15s\n3. Communication System (Orquestrador)\n\n## API REST\n\n- GET /api/health - Status do sistema\n- POST /api/voice/recognize - Reconhecimento de voz\n- POST /api/vision/detect - Deteccao de visao\n- POST /api/ia/process - Processamento IA multimodal\n\n## Testes\n\n- Total: 12 testes\n- Passou: 12\n- Falhou: 0\n- Taxa de Sucesso: 100%\n\n## Licenca\n\nMIT License\n\nUltima atualizacao: 2026-05-06",
+      "size": 2345
+    },
+    {
+      "path": "master_orchestrator.bat",
+      "content": "# master_orchestrator.bat\n@echo off\nchcp 65001 >nul\ntitle IA_Automate - Master Orchestrator\ncolor 0B\n\ncd /d \"%~dp0\"\n\necho.\necho ============================================================\necho.\necho        IA_Automate - Master Orchestrator\necho.\necho ============================================================\necho.\n\nset NAVEGADOR_BAT=%CD%\\\navegador\\iniciar.bat\nset SYSTEM_BAT=%CD%\\system\\iniciar1.bat\nset COMMUNICATION_BAT=%CD%\\communication_system\\Init_Com.bat\n\nif not exist \"%NAVEGADOR_BAT%\" (\n    echo ERRO: %NAVEGADOR_BAT% nao encontrado!\n    pause\n    exit /b 1\n)\n\nif not exist \"%SYSTEM_BAT%\" (\n    echo ERRO: %SYSTEM_BAT% nao encontrado!\n    pause\n    exit /b 1\n)\n\nif not exist \"%COMMUNICATION_BAT%\" (\n    echo ERRO: %COMMUNICATION_BAT% nao encontrado!\n    pause\n    exit /b 1\n)\n\necho [1/3] Iniciando NAVEGADOR (Frontend Web)...\necho Arquivo: %NAVEGADOR_BAT%\ncall \"%NAVEGADOR_BAT%\"\necho OK - Navegador iniciado\necho.\n\necho Aguardando 25 segundos...\ntimeout /t 25 /nobreak\necho.\n\necho [2/3] Iniciando SYSTEM (Backend Python)...\necho Arquivo: %SYSTEM_BAT%\ncall \"%SYSTEM_BAT%\"\necho OK - System iniciado\necho.\n\necho Aguardando 15 segundos...\ntimeout /t 15 /nobreak\necho.\n\necho [3/3] Iniciando COMMUNICATION_SYSTEM (Orquestrador)...\necho Arquivo: %COMMUNICATION_BAT%\ncall \"%COMMUNICATION_BAT%\"\necho OK - Communication System iniciado\necho.\n\necho.\necho TODOS OS SISTEMAS INICIADOS COM SUCESSO!\necho.\necho.\necho Pressione qualquer tecla para sair...\npause\n\nexit /b 0",
+      "size": 1834
+    },
+    {
+      "path": "navegador/iniciar.bat",
+      "content": "# iniciar.bat\n@echo off\nchcp 65001 >nul\ntitle Navegador - IA_Automate\ncolor 0A\n\ncd /d \"%~dp0\"\n\necho.\necho ============================================================\necho.\necho        Navegador - IA_Automate\necho.\necho ============================================================\necho.\n\necho Iniciando navegador com interface web...\necho.\n\nstart http://localhost:5000\n\necho OK - Navegador iniciado em http://localhost:5000\necho.\necho Pressione qualquer tecla para sair...\npause",
+      "size": 456
+    },
+    {
+      "path": "navegador/src/index.html",
+      "content": "# index.html\n<!DOCTYPE html>\n<html lang=\"pt-BR\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Adapta ONE - Interface Multimodal</title>\n    <link rel=\"stylesheet\" href=\"../css/styles.css\">\n</head>\n<body>\n    <div class=\"container\">\n        <header>\n            <h1>Adapta ONE - Interface Multimodal</h1>\n            <div class=\"status\" id=\"status\">Status: Conectando...</div>\n        </header>\n        <main>\n            <section class=\"controls\">\n                <button onclick=\"startVoice()\" class=\"btn btn-primary\">Iniciar Voz</button>\n                <button onclick=\"startVision()\" class=\"btn btn-primary\">I

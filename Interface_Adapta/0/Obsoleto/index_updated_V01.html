@@ -1,0 +1,297 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adapta ONE - Interface Multimodal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+        h1 { color: #333; margin-bottom: 30px; text-align: center; font-size: 2.5em; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .section { background: #f8f9fa; padding: 20px; border-radius: 8px; border-left: 4px solid #667eea; }
+        .section h2 { color: #667eea; margin-bottom: 15px; font-size: 1.3em; }
+        button { padding: 10px 20px; margin: 5px 5px 5px 0; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: all 0.3s; }
+        button:hover { background: #764ba2; transform: translateY(-2px); box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4); }
+        button:active { transform: translateY(0); }
+        .status { padding: 10px; margin-top: 10px; border-radius: 4px; font-size: 0.9em; }
+        .status.active { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status.inactive { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .status.pending { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        .output-item { padding: 10px; margin: 8px 0; background: #f0f0f0; border-left: 3px solid #667eea; border-radius: 4px; }
+        .output-item.user { background: #e3f2fd; border-left-color: #2196F3; }
+        .output-item.ai { background: #f3e5f5; border-left-color: #9c27b0; }
+        .output-item.system { background: #e8f5e9; border-left-color: #4caf50; }
+        .backend-status { text-align: center; padding: 15px; background: #e7f3ff; border-radius: 8px; margin-bottom: 20px; }
+        .backend-status.connected { background: #d4edda; color: #155724; }
+        .backend-status.disconnected { background: #f8d7da; color: #721c24; }
+        .sync-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        .sync-indicator.active { background: #28a745; animation: pulse 1s infinite; }
+        .sync-indicator.inactive { background: #dc3545; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .test-section { background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #ffc107; }
+        .test-result { padding: 8px; margin: 5px 0; background: white; border-radius: 4px; }
+        .test-result.pass { border-left: 3px solid #28a745; }
+        .test-result.fail { border-left: 3px solid #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧠 Adapta ONE - Interface Multimodal</h1>
+        
+        <div class="backend-status" id="backend-status">
+            <span class="sync-indicator inactive" id="sync-indicator"></span>
+            <span id="backend-text">Conectando ao backend...</span>
+        </div>
+
+        <div class="grid">
+            <div class="section">
+                <h2>👁️ Captura de Tela</h2>
+                <button onclick="startScreenCapture()">▶ Iniciar</button>
+                <button onclick="stopScreenCapture()">⏹ Parar</button>
+                <div class="status inactive" id="screen-status">Aguardando...</div>
+            </div>
+
+            <div class="section">
+                <h2>👂 Áudio</h2>
+                <button onclick="startAudio()">▶ Iniciar</button>
+                <button onclick="stopAudio()">⏹ Parar</button>
+                <div class="status inactive" id="audio-status">Aguardando...</div>
+            </div>
+
+            <div class="section">
+                <h2>🎥 Vídeo</h2>
+                <video id="video" autoplay playsinline></video>
+                <button onclick="startVideo()">▶ Câmera</button>
+                <button onclick="stopVideo()">⏹ Câmera</button>
+                <div class="status inactive" id="video-status">Aguardando...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>💬 Enviar Mensagem para IA</h2>
+            <input type="text" id="message-input" placeholder="Digite sua mensagem..." style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; margin-bottom: 10px;">
+            <button onclick="sendMessage()">📤 Enviar</button>
+            <button onclick="sendMultimodal()">🎯 Enviar Multimodal</button>
+        </div>
+
+        <div class="section">
+            <h2>🧠 Saída da IA</h2>
+            <div id="output">
+                <div class="output-item system">Aguardando entrada...</div>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h2>🧪 Status do Sistema</h2>
+            <div id="test-results"></div>
+        </div>
+    </div>
+
+    <script>
+        const BACKEND_URL = 'http://localhost:5000';
+        let screenCaptureActive = false;
+        let audioActive = false;
+        let videoActive = false;
+
+        async function checkBackendConnection() {
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/health`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('backend-status').classList.add('connected');
+                    document.getElementById('backend-status').classList.remove('disconnected');
+                    document.getElementById('backend-text').textContent = `✓ Conectado | IA Models: ${data.ai_models_available ? '✓' : '✗'} | IA Integration: ${data.ia_integration_available ? '✓' : '✗'}`;
+                    document.getElementById('sync-indicator').classList.add('active');
+                    document.getElementById('sync-indicator').classList.remove('inactive');
+                    return true;
+                }
+            } catch (error) {
+                document.getElementById('backend-status').classList.add('disconnected');
+                document.getElementById('backend-status').classList.remove('connected');
+                document.getElementById('backend-text').textContent = '✗ Backend desconectado';
+                document.getElementById('sync-indicator').classList.remove('active');
+                document.getElementById('sync-indicator').classList.add('inactive');
+                return false;
+            }
+        }
+
+        async function startScreenCapture() {
+            try {
+                screenCaptureActive = true;
+                updateStatus('screen-status', '✓ Captura ativa', 'active');
+                addOutput('📸 Captura de tela iniciada', 'system');
+                
+                const response = await fetch(`${BACKEND_URL}/api/screen-capture`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' })
+                });
+                
+                if (response.ok) {
+                    addOutput('✓ Captura enviada ao backend', 'system');
+                }
+            } catch (error) {
+                updateStatus('screen-status', '✗ Erro: ' + error.message, 'inactive');
+                addOutput('❌ Erro na captura: ' + error.message, 'system');
+            }
+        }
+
+        function stopScreenCapture() {
+            screenCaptureActive = false;
+            updateStatus('screen-status', '✗ Captura parada', 'inactive');
+            addOutput('⏹ Captura de tela parada', 'system');
+        }
+
+        async function startAudio() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioActive = true;
+                updateStatus('audio-status', '✓ Áudio ativo', 'active');
+                addOutput('🎤 Áudio iniciado', 'system');
+                
+                const response = await fetch(`${BACKEND_URL}/api/audio`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ duration: 5, frequency: 44100 })
+                });
+                
+                if (response.ok) {
+                    addOutput('✓ Áudio enviado ao backend', 'system');
+                }
+            } catch (error) {
+                updateStatus('audio-status', '✗ Erro: ' + error.message, 'inactive');
+                addOutput('❌ Erro no áudio: ' + error.message, 'system');
+            }
+        }
+
+        function stopAudio() {
+            audioActive = false;
+            updateStatus('audio-status', '✗ Áudio parado', 'inactive');
+            addOutput('⏹ Áudio parado', 'system');
+        }
+
+        async function startVideo() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                document.getElementById('video').srcObject = stream;
+                videoActive = true;
+                updateStatus('video-status', '✓ Câmera ativa', 'active');
+                addOutput('📹 Câmera iniciada', 'system');
+                
+                const response = await fetch(`${BACKEND_URL}/api/video-frame`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ width: 1280, height: 720 })
+                });
+                
+                if (response.ok) {
+                    addOutput('✓ Vídeo enviado ao backend', 'system');
+                }
+            } catch (error) {
+                updateStatus('video-status', '✗ Erro: ' + error.message, 'inactive');
+                addOutput('❌ Erro na câmera: ' + error.message, 'system');
+            }
+        }
+
+        function stopVideo() {
+            const video = document.getElementById('video');
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                videoActive = false;
+                updateStatus('video-status', '✗ Câmera parada', 'inactive');
+                addOutput('⏹ Câmera parada', 'system');
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+            
+            if (!text) {
+                addOutput('⚠️ Digite uma mensagem', 'system');
+                return;
+            }
+            
+            try {
+                addOutput(`Você: ${text}`, 'user');
+                input.value = '';
+                
+                const response = await fetch(`${BACKEND_URL}/api/ia/message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text, context: {} })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        addOutput(`IA: ${data.text}`, 'ai');
+                    } else {
+                        addOutput(`❌ Erro: ${data.error}`, 'system');
+                    }
+                } else {
+                    addOutput(`❌ Erro na requisição: ${response.status}`, 'system');
+                }
+            } catch (error) {
+                addOutput(`❌ Erro: ${error.message}`, 'system');
+            }
+        }
+
+        async function sendMultimodal() {
+            try {
+                addOutput('🎯 Processando entrada multimodal...', 'system');
+                
+                const response = await fetch(`${BACKEND_URL}/api/ia/multimodal`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        voice_text: 'Detectei um rosto na câmera',
+                        vision_data: { faces_detected: 1 },
+                        screen_data: 'Captura de tela processada'
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        addOutput(`IA (Multimodal): ${data.text}`, 'ai');
+                    } else {
+                        addOutput(`❌ Erro: ${data.error}`, 'system');
+                    }
+                } else {
+                    addOutput(`❌ Erro na requisição: ${response.status}`, 'system');
+                }
+            } catch (error) {
+                addOutput(`❌ Erro: ${error.message}`, 'system');
+            }
+        }
+
+        function updateStatus(elementId, text, className) {
+            const element = document.getElementById(elementId);
+            element.textContent = text;
+            element.className = `status ${className}`;
+        }
+
+        function addOutput(message, type = 'system') {
+            const output = document.getElementById('output');
+            const item = document.createElement('div');
+            item.className = `output-item ${type}`;
+            item.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            output.appendChild(item);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        window.addEventListener('load', () => {
+            checkBackendConnection();
+            setInterval(checkBackendConnection, 5000);
+            addOutput('🚀 Interface iniciada', 'system');
+            
+            document.getElementById('message-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendMessage();
+            });
+        });
+    </script>
+</body>
+</html>

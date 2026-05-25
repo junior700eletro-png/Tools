@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-05-04T22:58:43.303853",
+  "passed": 12,
+  "failed": 0,
+  "results": [
+    {
+      "test": "Conexão com Backend",
+      "status": "PASS",
+      "message": "Status: healthy | IA Models: True | IA Integration: True",
+      "timestamp": "2026-05-04T22:58:17.600806"
+    },
+    {
+      "test": "Conexão com Frontend",
+      "status": "PASS",
+      "message": "Arquivo index.html carregado (4026 bytes)",
+      "timestamp": "2026-05-04T22:58:18.609378"
+    },
+    {
+      "test": "Modelo de Voz",
+      "status": "PASS",
+      "message": "Status: unavailable",
+      "timestamp": "2026-05-04T22:58:21.665239"
+    },
+    {
+      "test": "Modelo de Visão",
+      "status": "PASS",
+      "message": "Status: ready",
+      "timestamp": "2026-05-04T22:58:23.720519"
+    },
+    {
+      "test": "Status da IA",
+      "status": "PASS",
+      "message": "Status: ready",
+      "timestamp": "2026-05-04T22:58:26.802509"
+    },
+    {
+      "test": "Envio de Mensagem",
+      "status": "PASS",
+      "message": "Resposta: Olá! Sou a IA Adapta ONE. Como posso ajudá-lo?...",
+      "timestamp": "2026-05-04T22:58:28.877943"
+    },
+    {
+      "test": "Rota /api/status",
+      "status": "PASS",
+      "message": "Status da Interface",
+      "timestamp": "2026-05-04T22:58:31.923975"
+    },
+    {
+      "test": "Rota /api/health",
+      "status": "PASS",
+      "message": "Health Check",
+      "timestamp": "2026-05-04T22:58:33.990238"
+    },
+    {
+      "test": "Rota /api/ia/history",
+      "status": "PASS",
+      "message": "Histórico de IA",
+      "timestamp": "2026-05-04T22:58:36.056628"
+    },
+    {
+      "test": "Rota /api/voice/status",
+      "status": "PASS",
+      "message": "Status de Voz",
+      "timestamp": "2026-05-04T22:58:38.119122"
+    },
+    {
+      "test": "Rota /api/vision/status",
+      "status": "PASS",
+      "message": "Status de Visão",
+      "timestamp": "2026-05-04T22:58:40.186107"
+    },
+    {
+      "test": "Processamento Multimodal",
+      "status": "PASS",
+      "message": "Resposta: Processando: [VOZ] Detectei um rosto na câm... Aná...",
+      "timestamp": "2026-05-04T22:58:43.275080"
+    }
+  ]
+}

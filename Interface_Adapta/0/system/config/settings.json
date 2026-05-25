@@ -1,0 +1,17 @@
+﻿{
+  "sistema": {
+    "nome": "Adapta Communication System",
+    "versao": "1.0.0",
+    "modo": "desenvolvimento"
+  },
+  "monitoramento": {
+    "intervalo_segundos": 10,
+    "ativar_ocr": true,
+    "idioma_ocr": "pt"
+  },
+  "caminhos": {
+    "base": "system",
+    "logs": "system/logs",
+    "output": "system/output"
+  }
+}

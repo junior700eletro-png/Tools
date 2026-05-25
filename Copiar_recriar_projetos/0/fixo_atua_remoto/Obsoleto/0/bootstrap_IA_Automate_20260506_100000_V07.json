@@ -1,0 +1,66 @@
+﻿{
+  "created_date": "2026-05-06 10:00:00",
+  "version": "1.0.0",
+  "project_name": "IA_Automate",
+  "description": "Plataforma Multimodal de Automacao Inteligente com IA",
+  "author": "Adapta ONE",
+  "license": "MIT",
+  "status": "Development",
+  "files": [
+    {
+      "path": "README.md",
+      "content": "# IA_Automate\n\nPlataforma Multimodal de Automacao Inteligente\n\n## Inicio Rapido\n\nmaster_orchestrator.bat",
+      "size": 89
+    },
+    {
+      "path": "master_orchestrator.bat",
+      "content": "@echo off\ncd /d \"%~dp0\"\necho Iniciando IA_Automate...\npause",
+      "size": 67
+    },
+    {
+      "path": "navegador/iniciar.bat",
+      "content": "@echo off\necho Navegador iniciado\npause",
+      "size": 45
+    },
+    {
+      "path": "navegador/src/index.html",
+      "content": "<!DOCTYPE html>\n<html>\n<head><title>Adapta ONE</title></head>\n<body><h1>IA_Automate</h1></body>\n</html>",
+      "size": 78
+    },
+    {
+      "path": "system/iniciar1.bat",
+      "content": "@echo off\necho System iniciado\npause",
+      "size": 45
+    },
+    {
+      "path": "system/src/backend.py",
+      "content": "print('Backend iniciado')",
+      "size": 28
+    },
+    {
+      "path": "communication_system/Init_Com.bat",
+      "content": "@echo off\necho Communication System iniciado\npause",
+      "size": 55
+    },
+    {
+      "path": "communication_system/src/main_orchestrator.py",
+      "content": "print('Orquestrador iniciado')",
+      "size": 32
+    },
+    {
+      "path": "docs/README.md",
+      "content": "# Documentacao\n\nIA_Automate v1.0.0",
+      "size": 35
+    }
+  ],
+  "source_folder": "C:\Users\user\Desktop\Tools\Interface_Adapta",
+  "ignore_mode": false,
+  "folders": [
+    "navegador",
+    "system",
+    "communication_system",
+    "docs"
+  ],
+  "total_files": 9,
+  "total_size_mb": 0.01
+}

@@ -1,0 +1,2457 @@
+=========================PATCH 9================================
+
+
+O problema aí é que, nesse fluxo específico, o nome está vindo **vazio** e só a extensão está sendo detectada, então depois vira `.txt`. Isso indica que:
+
+1. Não foi detectado header na primeira linha.
+2. `Get-FilenameFromMetadata` não retornou nada (alguma parte da lógica nova ainda não entrou em ação).
+3. A parte que faz `if ($filename -notmatch '\.\w+$')` está rodando com `$filename` vazio, e a detecção de extensão está caindo em `'txt'`. [jhoneill.github](https://jhoneill.github.io/powershell/2021/04/11/regex2.html)
+
+Vou te dar o ajuste mínimo para esse caso do Python funcionar do jeito que você descreveu, sem mexer no resto.
+
+***
+
+## 1. Garantir que o fallback use comentários comuns
+
+Confirme que `Get-FilenameFallbackWithTimestamp` está assim:
+
+```powershell
+function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) { Write-Host "✓ Fallback: $fn" -ForegroundColor Green }
+    Write-Log "Nome por fallback timestamp: $fn"
+    return $fn
+}
+```
+
+E que `Get-FilenameFromMetadata` já inclui o passo de comentários comuns (`Extract-AnyCommentFilename`) como te passei na mensagem anterior.
+
+Esse é o pedaço que deveria pegar `# meu_script.py` **mesmo não sendo metadado**, porque varre todas as linhas procurando `nome.ext` em qualquer comentário. [forums.powershell](https://forums.powershell.org/t/regex-in-powershell-line-by-line-from-txt-file/15140)
+
+***
+
+## 2. Corrigir o caso “filename vazio + extensão detectada”
+
+Independentemente da lógica de nome, você não quer que o script aceite um nome vazio e apenas pendure `.txt`. Para isso, logo após a linha que resolve o nome, coloque uma proteção:
+
+Logo depois deste bloco:
+
+```powershell
+$headerFound = $false
+if ($filename) {
+    ...
+} else {
+    Write-Host "❌ Nenhum header de nome encontrado nas primeiras linhas" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome; usando metadados/timestamp."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+adicione:
+
+```powershell
+# Se ainda assim o nome vier vazio por algum bug, força fallback com timestamp
+if (-not $filename) {
+    Write-Host "⚠ Nome ainda vazio após metadados. Usando fallback com timestamp." -ForegroundColor Yellow
+    Write-Log  "Nome vazio após metadados, forçando fallback."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+E só depois mantenha a parte de extensão:
+
+```powershell
+if ($filename -notmatch '\.\w+$') {
+    $extDetected = Detect-ContentExtension -Content $content
+    Write-Host "Extensão detectada: .$extDetected" -ForegroundColor Magenta
+    Write-Log  "Extensão detectada: .$extDetected para $filename"
+    $filename = "$filename.$extDetected"
+}
+```
+
+Assim você **nunca** cai na situação de `$filename` vazio virando `.txt`. [netwrix](https://netwrix.com/en/resources/blog/powershell-write-to-file/)
+
+***
+
+## 3. Teste rápido com o Python
+
+Com os ajustes de:
+
+- `Get-FilenameFromMetadata` chamando `Extract-AnyCommentFilename`.
+- Proteção para não admitir nome vazio.
+
+O caso:
+
+```python
+#!/usr/bin/python3
+# meu_script.py
+print("Hello")
+```
+
+deve se comportar assim:
+
+- Header nas primeiras linhas:
+  - Não encontra header na primeira linha (shebang).
+  - Se você ainda não habilitou o “header na segunda linha”, tudo bem.
+- Metadados:
+  - `"filename"`: não há.
+  - `@FILE:`: não há.
+  - Comentário comum com `nome.ext`: **há**, linha `# meu_script.py`.
+  - `Extract-AnyCommentFilename` retorna `meu_script.py`, o menu mostra (ou retorna direto se só tiver um), e `Get-FilenameFromMetadata` devolve esse nome.
+- Resultado:
+  - `$filename = "meu_script.py"`.
+  - A parte de extensão vê que já tem `.py` e não mexe.
+  - No menu aparece “Nome detectado: meu_script.py”.
+
+Se depois de colar esses trechos o nome ainda vier `.txt`, me manda exatamente como estão:
+
+- A função `Get-FilenameFromMetadata`.
+- A função `Extract-AnyCommentFilename`.
+- O trecho do fluxo principal onde `$filename` é resolvido.
+
+Aí ajusto linha por linha em cima do que você está usando.
+
+=========================PATCH 10================================
+
+Então está claro o porquê do `.txt`: nessa versão do seu script, vocês acabaram tirando (ou renomeando) a função `Get-FilenameFallbackWithTimestamp`, e o fluxo de nome ficou incompleto; por isso o nome chega vazio e só sobra a detecção de extensão. [learn.microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions?view=powershell-7.6)
+
+Para arrumar isso e, ao mesmo tempo, cumprir o que você quer (usar comentários comuns como fonte de nome antes do timestamp), vou te passar o conjunto mínimo de funções que você precisa adicionar/ajustar. Você pode colar exatamente como está.
+
+***
+
+## 1. Criar (ou recriar) `Get-FilenameFallbackWithTimestamp`
+
+Adicione essa função em qualquer lugar junto com as outras funções de nome:
+
+```powershell
+function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    # 1) Tenta metadados (JSON, @FILE:, comentários comuns)
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    # 2) Se nada encontrado, gera nome com timestamp
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) { Write-Host "✓ Fallback: $fn" -ForegroundColor Green }
+    Write-Log "Nome por fallback timestamp: $fn"
+    return $fn
+}
+```
+
+Ela é o “funil” que decide: metadados primeiro, timestamp só se nada der certo. [stackoverflow](https://stackoverflow.com/questions/1954203/timestamp-on-file-name-using-powershell)
+
+***
+
+## 2. Garantir que `Get-FilenameFromMetadata` use JSON, `@FILE:` e comentários comuns
+
+Deixe `Get-FilenameFromMetadata` exatamente assim:
+
+```powershell
+function Get-FilenameFromMetadata {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    if ($Verbose) { Write-Host "Buscando metadata JSON (\"filename\")..." -ForegroundColor Yellow }
+    $fn = Extract-JsonMetadata $Content
+    if ($fn) {
+        if ($Verbose) { Write-Host "✓ JSON: $fn" -ForegroundColor Green }
+        Write-Log "Nome detectado via JSON: $fn"
+        return $fn
+    }
+
+    if ($Verbose) { Write-Host "Buscando @FILE nos comentários..." -ForegroundColor Yellow }
+    $allFromComments = Extract-CommentMetadata $Content
+    if ($allFromComments -and $allFromComments.Count -gt 0) {
+        $chosen = Select-FilenameFromList -Names $allFromComments
+        if ($chosen) {
+            if ($Verbose) { Write-Host "✓ Comentário (@FILE): $chosen" -ForegroundColor Green }
+            Write-Log "Nome selecionado via @FILE: $chosen"
+            return $chosen
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de @FILE." -ForegroundColor Yellow }
+        }
+    }
+
+    if ($Verbose) { Write-Host "Buscando nome em comentários gerais (#, REM, ::, //, ;)..." -ForegroundColor Yellow }
+    $allFromAnyComments = Extract-AnyCommentFilename $Content
+    if ($allFromAnyComments -and $allFromAnyComments.Count -gt 0) {
+        $chosen2 = Select-FilenameFromList -Names $allFromAnyComments
+        if ($chosen2) {
+            if ($Verbose) { Write-Host "✓ Comentário (genérico): $chosen2" -ForegroundColor Green }
+            Write-Log "Nome selecionado via comentário genérico: $chosen2"
+            return $chosen2
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de comentários genéricos." -ForegroundColor Yellow }
+        }
+    }
+
+    return $null
+}
+```
+
+E tenha também estas duas auxiliares (se ainda não estiverem no script):
+
+```powershell
+function Extract-JsonMetadata {
+    param([string]$Content)
+    if ($Content -match '"filename"\s*:\s*"([^"]+\.\w+)"') {
+        return $matches [learn.microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions?view=powershell-7.6).Trim()
+    }
+    return $null
+}
+
+function Extract-CommentMetadata {
+    param([string]$Content)
+
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\s*(?:#|//|;|REM\b|rem\b|::)?\s*@FILE:\s*(.+\.\w+)') {
+            $matchesList += $matches [learn.microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions?view=powershell-7.6).Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Extract-AnyCommentFilename {
+    param([string]$Content)
+
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $matchesList += $matches [learn.microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions?view=powershell-7.6).Trim()
+        }
+    }
+
+    return $matchesList
+}
+```
+
+***
+
+## 3. No fluxo principal, chamar sempre o fallback (e proteger contra vazio)
+
+No trecho onde você trata o caso “não tem header na primeira linha”, deixe assim:
+
+```powershell
+$headerRemovedContent = ''
+$filename = Extract-HeaderFilename -AllLines $allLines `
+                                   -HeaderLineRemovedContent ([ref]$headerRemovedContent) `
+                                   -HeaderLineIndex ([ref]$headerLineIndex)
+
+$headerFound = $false
+if ($filename) {
+    $headerFound = $true
+    Write-Host "✓ Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename" -ForegroundColor Green
+    Write-Log  "Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename"
+
+    if (-not [string]::IsNullOrWhiteSpace($headerRemovedContent)) {
+        $content = $headerRemovedContent
+    }
+} else {
+    Write-Host "❌ Nenhum header de nome encontrado nas primeiras linhas" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome; usando metadados/timestamp."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+
+# Proteção extra: se ainda vier vazio por algum bug, força fallback
+if (-not $filename) {
+    Write-Host "⚠ Nome ainda vazio após metadados. Usando fallback com timestamp." -ForegroundColor Yellow
+    Write-Log  "Nome vazio após metadados, forçando fallback."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+***
+
+## 4. O que isso resolve no seu exemplo Python
+
+Conteúdo:
+
+```python
+#!/usr/bin/python3
+# meu_script.py
+print("Hello")
+```
+
+- Header:
+  - Linha 1 (`#!/usr/bin/python3`) não casa com header de nome.
+  - Se você ainda não estiver usando a lógica de “segunda linha como header”, isso é ok.
+- Metadados:
+  - `"filename"`: não existe.
+  - `@FILE:`: não existe.
+  - Comentários comuns com nome.ext: **existe** `# meu_script.py`.  
+    → `Extract-AnyCommentFilename` encontra `meu_script.py` e `Get-FilenameFromMetadata` devolve esse nome.
+- Fallback:
+  - `Get-FilenameFallbackWithTimestamp` retorna `meu_script.py` (não timestamp).
+- Extensão:
+  - Já tem `.py`, então `Detect-ContentExtension` não acrescenta `.txt`.
+
+Ou seja, com essas três partes no lugar:
+
+- A função `Get-FilenameFallbackWithTimestamp`.
+- `Get-FilenameFromMetadata` chamando comentários comuns.
+- O fallback extra se `$filename` vier vazio.
+
+o menu deve mostrar “Nome detectado: meu_script.py” em vez de `.txt`.
+
+=========================VALIDAÇÃO (SEM PATCH)================================
+
+
+Bom saber que funcionou, o script já está bem robusto agora. [netwrix](https://netwrix.com/en/resources/blog/powershell-write-to-file/)
+
+Se mais pra frente quiser:
+
+- Passar a pasta destino por parâmetro (`-TargetFolder`) para integrar direto com o menu do Explorer.
+- Ou criar uma versão “lite” só para salvar rápido sem menu.
+
+é só dizer o que você quer que eu ajusto em cima da versão atual.
+
+
+=========================PATCH 11================================
+
+Incluí sim na versão consolidada que te mandei, mas como você foi colando mudanças aos poucos é bem possível que o bloco de logging tenha ficado para trás em algum merge.
+
+Para ficar claro, estes são os pedaços que caracterizam o **logging** no script:
+
+***
+
+## 1. Cabeçalho de logging (topo do script)
+
+Logo depois do `Add-Type`:
+
+```powershell
+Add-Type -AssemblyName System.Windows.Forms
+
+# ---------- Logging ----------
+
+$logFile = Join-Path $env:TEMP 'Create_file_v2.log'
+
+function Write-Log {
+    param(
+        [string]$Message
+    )
+    try {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        "$timestamp`t$Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
+    } catch {
+        # Se o log falhar, não quebra o script
+    }
+}
+```
+
+Isso cria (ou reaproveita) o arquivo `%TEMP%\Create_file_v2.log`. [netwrix](https://netwrix.com/en/resources/blog/powershell-write-to-file/)
+
+***
+
+## 2. Exemplos de chamadas de `Write-Log` no fluxo
+
+Em vários pontos importantes eu sugeri chamadas como:
+
+```powershell
+Write-Log "Pasta selecionada: $targetFolder"
+Write-Log "Conteúdo salvo em temp: $tempFile"
+Write-Log "Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename"
+Write-Log "Nome selecionado via comentário genérico: $chosen2"
+Write-Log "Backup criado: $backupPath"
+Write-Log "Arquivo salvo: $destPath"
+Write-Log "Expandindo JSON custom: $tempFile -> $targetFolder"
+Write-Log "Sessão finalizada. Temp removido: $tempFile"
+```
+
+Se hoje seu script não está escrevendo nada em `Create_file_v2.log`, significa que:
+
+- Ou o bloco com `$logFile` e `Write-Log` não foi copiado.
+- Ou as chamadas `Write-Log "..."` foram removidas ou não chegaram a ser coladas.
+
+***
+
+## Quer que eu te mande o script atual COMPLETO com logging?
+
+Posso pegar a versão que você está usando (com:
+
+- header na primeira linha,
+- fallback com comentários comuns,
+- controle de versões em Obsoleto,
+- correção do menu “Sair”),
+
+e te devolver tudo de novo já com:
+
+- bloco de logging no topo,
+- chamadas `Write-Log` inseridas nos pontos principais.
+
+Se você quiser isso, me confirma só: “pode mandar o script completo com log”, que eu monto em cima da lógica que já está ok e te entrego uma versão única para substituir o arquivo atual.
+
+=========================PATCH 12================================
+
+Estou reexaminando o script Create_file_v3_ps1.txt com base nas suas observações.
+Entendi perfeitamente. Você quer que eu volte no arquivo Create_file_v3_ps1.txt e verifique ESPECIFICAMENTE se:
+✅ O bloco de logging está presente (após Add-Type)
+✅ As chamadas Write-Log estão nos pontos críticos do fluxo
+Vou fazer isso agora — uma análise focada e direta apenas nessas duas coisas.
+🔴 VEREDICTO: LOGGING FALTANDO
+Você estava 100% correto. A análise confirma:
+Status do Logging:
+ItemStatusDetalhes
+Cabeçalho # ---------- Logging ----------
+❌ FALTANDO
+Não encontrado
+Variável $logFile
+❌ FALTANDO
+Não definida
+Função Write-Log
+❌ FALTANDO
+Não existe
+Chamadas Write-Log no fluxo
+❌ QUASE TUDO FALTANDO
+Apenas 1 de 8 encontrada
+O Que Está Faltando:
+❌ Bloco completo de logging (cabeçalho + função)
+❌ 7 das 8 chamadas Write-Log nos pontos críticos:
+✗ Write-Log "Pasta selecionada:
+✗ Write-Log "Conteúdo salvo em temp:
+✗ Write-Log "Header de nome detectado
+✓ Write-Log "Nome selecionado via comentário (APENAS ESTA)
+✗ Write-Log "Backup criado:
+✗ Write-Log "Arquivo salvo:
+✗ Write-Log "Expandindo JSON custom:
+✗ Write-Log "Sessão finalizada
+
+Você está certo: na versão que você está revisando, o logging praticamente não entrou. [netwrix](https://netwrix.com/en/resources/blog/powershell-write-to-file/)
+
+Segue o pacote completo que você pode colar no script v3, em dois passos.
+
+***
+
+## 1. Bloco de logging (coloque logo após o `Add-Type`)
+
+```powershell
+Add-Type -AssemblyName System.Windows.Forms
+
+# ---------- Logging ----------
+
+$logFile = Join-Path $env:TEMP 'Create_file_v2.log'
+
+function Write-Log {
+    param(
+        [string]$Message
+    )
+    try {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        "$timestamp`t$Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
+    } catch {
+        # Se o log falhar, não quebra o script
+    }
+}
+```
+
+Isso garante:
+
+- Arquivo de log em `%TEMP%\Create_file_v2.log`.
+- Função `Write-Log` disponível para o resto do script. [script-example](https://www.script-example.com/en/powershell-logging)
+
+***
+
+## 2. Chamadas Write-Log nos pontos críticos
+
+Você pode inserir estas linhas nos lugares indicados (nomes/caminhos podem ajustar se quiser):
+
+### Início do fluxo principal
+
+Logo após a primeira mensagem do script:
+
+```powershell
+Write-Host "Create_file_v2.ps1 - Criando arquivo a partir do clipboard" -ForegroundColor Cyan
+Write-Log "Iniciando execução do script."
+```
+
+### Pasta selecionada
+
+Depois de definir `$targetFolder`:
+
+```powershell
+$targetFolder = $folderBrowser.SelectedPath
+Write-Host "Pasta selecionada: $targetFolder" -ForegroundColor Green
+Write-Log "Pasta selecionada: $targetFolder"
+```
+
+### Conteúdo salvo em TEMP
+
+Logo após salvar o temp:
+
+```powershell
+$tempFile = [System.IO.Path]::GetTempFileName()
+$contentOriginal | Out-File -FilePath $tempFile -Encoding utf8
+Write-Host "Conteúdo salvo temporariamente em: $tempFile" -ForegroundColor Gray
+Write-Log "Conteúdo salvo em temp: $tempFile"
+```
+
+### Header de nome detectado
+
+No bloco `if ($filename)` do header:
+
+```powershell
+$headerFound = $false
+if ($filename) {
+    $headerFound = $true
+    Write-Host "✓ Header de nome detectado: $filename" -ForegroundColor Green
+    Write-Log  "Header de nome detectado: $filename"
+    ...
+}
+```
+
+### Fallback (nenhum header)
+
+No `else` do header:
+
+```powershell
+} else {
+    Write-Host "❌ Nenhum header de nome encontrado nas primeiras linhas" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome; usando metadados/timestamp."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+### Proteção extra (nome vazio)
+
+Depois do bloco acima:
+
+```powershell
+if (-not $filename) {
+    Write-Host "⚠ Nome ainda vazio após metadados. Usando fallback com timestamp." -ForegroundColor Yellow
+    Write-Log  "Nome vazio após metadados, forçando fallback."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+### Extensão detectada
+
+Logo após detectar a extensão:
+
+```powershell
+if ($filename -notmatch '\.\w+$') {
+    $extDetected = Detect-ContentExtension -Content $content
+    Write-Host "Extensão detectada: .$extDetected" -ForegroundColor Magenta
+    Write-Log  "Extensão detectada: .$extDetected para $filename"
+    $filename = "$filename.$extDetected"
+}
+```
+
+### No backup em Obsoleto
+
+Dentro da opção 3, quando o arquivo já existe:
+
+```powershell
+if (Test-Path $destPath) {
+    Write-Host "Arquivo já existe. Preparando backup em Obsoleto..." -ForegroundColor Yellow
+    Write-Log  "Arquivo já existe, preparando backup: $destPath"
+    ...
+    Write-Host "Backup criado: $backupPath" -ForegroundColor Green
+    Write-Log  "Backup criado: $backupPath"
+}
+```
+
+### Ao salvar o arquivo final
+
+Ainda na opção 3:
+
+```powershell
+Copy-Item -Path $finalTemp -Destination $destPath -Force
+Write-Host "✓ Arquivo salvo: $destPath" -ForegroundColor Green
+Write-Log  "Arquivo salvo: $destPath"
+```
+
+### Expansão JSON custom
+
+Na opção 5, antes de expandir:
+
+```powershell
+if ($ext -ne 'json') {
+    Write-Host "Esta opção é específica para arquivos JSON." -ForegroundColor Yellow
+    Write-Log  "Tentativa de expandir JSON em arquivo não-JSON: $filename"
+} else {
+    Validate-AndFix-Json -Path $tempFile
+    Write-Log  "Expandindo JSON custom: $tempFile -> $targetFolder"
+    Expand-CustomJsonProject -JsonPath $tempFile -TargetRoot $targetFolder
+}
+```
+
+### Ao sair do menu
+
+Na opção 6:
+
+```powershell
+'6' {
+    $exit = $true
+    Write-Log "Usuário escolheu sair do menu."
+}
+```
+
+### Limpeza final
+
+Depois de remover o temp:
+
+```powershell
+Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+Write-Log "Sessão finalizada. Temp removido: $tempFile"
+Write-Host "Sessão finalizada." -ForegroundColor Cyan
+```
+
+***
+
+Se quiser, na próxima mensagem posso te mandar o **Create_file_v3** inteiro já com:
+
+- logging,
+- header/nomes por comentários (incluindo `REM`, `::`, `#`, etc.),
+- fallback por metadados/timestamp,
+- backup em Obsoleto,
+- correção do “Sair” do menu,
+
+para você só colar e substituir.
+
+=========================PATCH 13================================
+
+ta quebrando no inicio:   Create_file_v2.ps1 - Criando arquivo a partir do clipboard
+Write-Log : O termo 'Write-Log' não é reconhecido como nome de cmdlet, função, arquivo de script ou programa operável.
+Verifique a grafia do nome ou, se um caminho tiver sido incluído, veja se o caminho está correto e tente novamente.
+No C:\\Users\\user\\Desktop\\Tools\\Copiar arquivos\\Create_file_v2.ps1:6 caractere:1
++ Write-Log "Iniciando execução do script."
++ ~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (Write-Log:String) [], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException
+
+Create_file_v2.ps1 - Criando arquivo a partir do clipboard
+Pasta selecionada:
+Operação cancelada.
+Pressione qualquer tecla para continuar. . .      AGUARDE UM POUCO, VOU REPRODUZIR O SCRIPT para voce achar o problema e corrigir qualquer outra coisa que estiver errada.
+
+Esse erro acontece porque o `Write-Log` está sendo chamado antes da função `Write-Log` ser declarada no script. PowerShell executa o arquivo de cima para baixo e só conhece as funções depois que as lê. [stackoverflow](https://stackoverflow.com/questions/3917592/why-do-i-need-to-have-my-functions-written-first-in-my-powershell-script)
+
+Você tem hoje algo assim no início:
+
+```powershell
+Add-Type -AssemblyName System.Windows.Forms
+
+Write-Host "Create_file_v2.ps1 - Criando arquivo a partir do clipboard" -ForegroundColor Cyan
+Write-Log "Iniciando execução do script."
+```
+
+e só depois, mais embaixo, aparece:
+
+```powershell
+function Write-Log { ... }
+```
+
+Isso gera o “Write-Log não é reconhecido”.
+
+Há duas formas simples de corrigir; a mais fácil é **mover a chamada** ou **mover a função**. Vou te sugerir a correção mínima.
+
+***
+
+## 1. Coloque a função `Write-Log` logo após o `Add-Type`
+
+O topo do script deve ficar assim:
+
+```powershell
+Add-Type -AssemblyName System.Windows.Forms
+
+# ---------- Logging ----------
+
+$logFile = Join-Path $env:TEMP 'Create_file_v2.log'
+
+function Write-Log {
+    param(
+        [string]$Message
+    )
+    try {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        "$timestamp`t$Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
+    } catch {
+        # Se o log falhar, não quebra o script
+    }
+}
+```
+
+Depois disso, **só abaixo desse bloco** vem o resto das funções (`Get-NextBackupName`, `Extract-...`, etc.) e o fluxo principal. [clebam.github](https://clebam.github.io/2018/02/10/Mastering-a-Write-Log-function/)
+
+***
+
+## 2. Só chame `Write-Log` depois da função
+
+Agora você pode deixar tranquilamente, lá mais embaixo, algo assim:
+
+```powershell
+Write-Host "Create_file_v2.ps1 - Criando arquivo a partir do clipboard" -ForegroundColor Cyan
+Write-Log "Iniciando execução do script."
+```
+
+O importante é:
+
+- `function Write-Log { ... }` tem que aparecer antes, no arquivo.
+- Não pode haver nenhum `Write-Log "..."` acima da definição da função.
+
+Se quiser garantir rápido:
+
+1. Procure no arquivo por `Write-Log`.
+2. Verifique se **a primeira ocorrência** é a definição da função `function Write-Log {`.
+3. Todas as outras devem ser chamadas.
+
+Depois de fazer esse ajuste, esse erro some e o script volta a rodar normalmente, já registrando o log no `%TEMP%\Create_file_v2.log`. [whatsupgold](https://www.whatsupgold.com/blog/how-to-build-a-logging-function-in-powershell)
+
+========================= VALIDAÇÃO SEM PATCH ================================
+ 
+
+# Utilitário para criar arquivo a partir do clipboard com validação, menu,
+# suporte a JSON customizado, detecção avançada de nome de arquivo
+# e controle de versões em pasta Obsoleto.
+
+Add-Type -AssemblyName System.Windows.Forms
+
+
+
+# ---------- Logging ----------
+
+$logFile = Join-Path $env:TEMP 'Create_file_v3.log'
+
+function Write-Log {
+    param(
+        [string]$Message
+    )
+    try {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        "$timestamp`t$Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
+    } catch {
+        # Se o log falhar, não quebra o script
+    }
+}
+
+
+
+# ---------- Versão de backup em Obsoleto ----------
+
+function Get-NextBackupName {
+    param(
+        [string]$baseName,
+        [string]$extension,  # com ponto, ex: ".ps1"
+        [string]$directory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($extension)) {
+        $extension = ''
+    }
+
+    $escapedBase = [regex]::Escape($baseName)
+    $escapedExt  = [regex]::Escape($extension)
+    $pattern = "^${escapedBase}_V(\\d{2})${escapedExt}$"
+
+    $numbers = @()
+
+    Get-ChildItem -Path $directory -File -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -match $pattern) {
+            $n = [int]$matches[1]
+            $numbers += $n
+        }
+    }
+
+    if ($numbers.Count -gt 0) {
+        $nextNum = ($numbers | Measure-Object -Maximum).Maximum + 1
+    } else {
+        $nextNum = 1
+    }
+
+    $suffix = $nextNum.ToString().PadLeft(2, '0')
+    return ($baseName + '_V' + $suffix + $extension)
+}
+
+# ---------- Funções de extração de nome ----------
+
+function Extract-FirstLineFilename {
+    param(
+        [string]$Path,
+        [ref]$HeaderLineRemovedContent
+    )
+    try {
+        $allLines = Get-Content -Path $Path
+        if ($allLines.Count -gt 0) {
+            $firstLine = $allLines[0]
+
+            # Header explícito de nome de arquivo em comentário da PRIMEIRA linha
+            # Aceita: "# meu_script.ps1 - texto", "REM meu_script.bat", "// nome.py", "; nome.txt"
+            if ($firstLine -match '^\\s*(?:#|REM\\b|rem\\b|//|;|::)\\s*([^\\s]+\\.\\w+)') {
+                # Aceita, por exemplo:
+                #   # meu_script.ps1 - Script
+                #   REM meu_script.bat
+                #   :: meu_script.bat
+                #   // meu_script.py
+                #   ; dados.txt
+                $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+                return $matches[1].Trim()
+            }
+        }
+    } catch {
+        Write-Warning "Erro ao ler primeira linha: $_"
+        Write-Log    "Erro ao ler primeira linha: $_"
+    }
+    return $null
+}
+
+# ----------Função: procura nome.ext em qualquer comentário ----------
+
+function Extract-AnyCommentFilename {
+    param([string]$Content)
+
+    # Varre todas as linhas, procurando qualquer comentário com algo tipo nome.ext
+    # Ex.:
+    #   # meu_script.py
+    #   REM meu_script.bat
+    #   :: meu_script.bat
+    #   // meu_script.ps1
+    #   ; dados.txt
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\\s*(?:#|REM\\b|rem\\b|//|;|::)\\s*([^\\s]+\\.\\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    # 1) Tenta metadados (JSON, @FILE:, comentários comuns)
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    # 2) Se nada encontrado, gera nome com timestamp
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) { Write-Host "✓ Fallback: $fn" -ForegroundColor Green }
+    Write-Log "Nome por fallback timestamp: $fn"
+    return $fn
+}
+
+function Extract-JsonMetadata {
+    param([string]$Content)
+    if ($Content -match '"filename"\\s*:\\s*"([^"]+\\.\\w+)"') {
+        return $matches[1].Trim()
+    }
+    return $null
+}
+
+function Extract-CommentMetadata {
+    param([string]$Content)
+
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\\s*(?:#|//|;|REM\\b|rem\\b|::)?\\s*@FILE:\\s*(.+\\.\\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Extract-AnyCommentFilename {
+    param([string]$Content)
+
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\\s*(?:#|REM\\b|rem\\b|//|;|::)\\s*([^\\s]+\\.\\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) { Write-Host "✓ Fallback: $fn" -ForegroundColor Green 
+    Write-Log "Nome por fallback timestamp: $fn"}
+    return $fn
+}
+
+function Extract-JsonMetadata {
+    param([string]$Content)
+    if ($Content -match '"filename"\\s*:\\s*"([^"]+\\.\\w+)"') {
+        return $matches[1].Trim()
+    }
+    return $null
+}
+
+function Extract-CommentMetadata {
+    param([string]$Content)
+
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\\s*(?:#|//|;|REM\\b|rem\\b|::)?\\s*@FILE:\\s*(.+\\.\\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Extract-AnyCommentFilename {
+    param([string]$Content)
+
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\\s*(?:#|REM\\b|rem\\b|//|;|::)\\s*([^\\s]+\\.\\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Extract-CommentMetadata {
+    param([string]$Content)
+
+    # Aceita linhas como:
+    #   # @FILE: nome.ext
+    #   @FILE: nome.ext
+    #   // @FILE: nome.ext
+    #   ; @FILE: nome.ext
+    #   REM @FILE: nome.ext
+    #
+    # Pode retornar vários nomes para escolha posterior.
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\\s*(?:#|//|;|REM\\b|rem\\b)?\\s*@FILE:\\s*(.+\\.\\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Select-FilenameFromList {
+    param(
+        [string[]]$Names
+    )
+
+    if (-not $Names -or $Names.Count -eq 0) {
+        return $null
+    }
+
+    if ($Names.Count -eq 1) {
+        return $Names[0]
+    }
+
+    Write-Host "Vários candidatos a nome de arquivo encontrados em @FILE:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Names.Count; $i++) {
+        Write-Host ("{0}. {1}" -f ($i + 1), $Names[$i]) -ForegroundColor White
+        Write-Log ("{0}. {1}" -f ($i + 1), $Names[$i]) -ForegroundColor White
+    }
+
+    while ($true) {
+        $choice = Read-Host ("Escolha o número desejado (1-{0}, ou Enter para cancelar)" -f $Names.Count)
+        if ([string]::IsNullOrWhiteSpace($choice)) {
+            return $null
+        }
+        if ($choice -as [int] -and $choice -ge 1 -and $choice -le $Names.Count) {
+            return $Names[$choice - 1]
+        }
+        Write-Host "Opção inválida." -ForegroundColor Red
+        Write-Log "Opção inválida." -ForegroundColor Red
+    }
+}
+
+function Get-FilenameFromMetadata {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    if ($Verbose) { Write-Host "Buscando metadata JSON (\\"filename\\")..." -ForegroundColor Yellow }
+    $fn = Extract-JsonMetadata $Content
+    if ($fn) {
+        if ($Verbose) { Write-Host "✓ JSON: $fn" -ForegroundColor Green }
+        Write-Log "Nome detectado via JSON: $fn"
+        return $fn
+    }
+
+    if ($Verbose) { Write-Host "Buscando @FILE nos comentários..." -ForegroundColor Yellow }
+    $allFromComments = Extract-CommentMetadata $Content
+    if ($allFromComments -and $allFromComments.Count -gt 0) {
+        $chosen = Select-FilenameFromList -Names $allFromComments
+        if ($chosen) {
+            if ($Verbose) { Write-Host "✓ Comentário (@FILE): $chosen" -ForegroundColor Green }
+            Write-Log "Nome selecionado via @FILE: $chosen"
+            return $chosen
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de @FILE." -ForegroundColor Yellow }
+        }
+    }
+
+    if ($Verbose) { Write-Host "Buscando nome em comentários gerais (#, REM, ::, //, ;)..." -ForegroundColor Yellow }
+    $allFromAnyComments = Extract-AnyCommentFilename $Content
+    if ($allFromAnyComments -and $allFromAnyComments.Count -gt 0) {
+        $chosen2 = Select-FilenameFromList -Names $allFromAnyComments
+        if ($chosen2) {
+            if ($Verbose) { Write-Host "✓ Comentário (genérico): $chosen2" -ForegroundColor Green }
+            Write-Log "Nome selecionado via comentário genérico: $chosen2"
+            return $chosen2
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de comentários genéricos." -ForegroundColor Yellow }
+        }
+    }
+
+    return $null
+}
+
+# ---------- Detecção de extensão ----------
+
+function Detect-ContentExtension {
+    param([string]$Content)
+
+    $firstNonEmpty = ($Content -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 10) -join "`n"
+
+    # Python: shebang, def main, imports típicos, indentação com :
+    if ($firstNonEmpty -match '^\\s*#\\s*!/usr/bin/env\\s+python' -or
+        $firstNonEmpty -match '^\\s*import\\s+\\w+' -or
+        $firstNonEmpty -match '^\\s*from\\s+\\w+\\s+import\\s+' -or
+        $firstNonEmpty -match '^\\s*def\\s+\\w+\\(') {
+        return 'py'
+    }
+
+    # PowerShell: param(), Write-Host, $PSVersionTable, function Nome { ... }
+    if ($firstNonEmpty -match '^\\s*param\\(' -or
+        $firstNonEmpty -match 'Write-Host' -or
+        $firstNonEmpty -match '\\$PSVersionTable' -or
+        $firstNonEmpty -match '^\\s*function\\s+\\w+\\s*\\{' -or
+        $firstNonEmpty -match '^\\s*\\[CmdletBinding\\(') {
+        return 'ps1'
+    }
+
+    # BAT / CMD: @echo off, goto, REM etc.
+    if ($firstNonEmpty -match '^\\s*@echo\\s+off' -or
+        $firstNonEmpty -match '^\\s*REM\\s' -or
+        $firstNonEmpty -match '^\\s*goto\\s+\\w+') {
+        return 'bat'
+    }
+
+    # JSON: começa com { ou [ e tem : depois
+    if ($firstNonEmpty -match '^\\s*[\\{\\[]' -and $Content -match '":\\s*') {
+        return 'json'
+    }
+
+    return 'txt'
+}
+
+# ---------- Validação de conteúdo ----------
+
+function Validate-Script {
+    param([string]$Path, [string]$Ext)
+
+    switch ($Ext.ToLower()) {
+        'ps1' {
+            try {
+                $errors = $null
+                [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$errors) | Out-Null
+                if ($errors -and $errors.Count -gt 0) {
+                    Write-Host "❌ Erros de sintaxe PS1:" -ForegroundColor Red
+                    Write-Log "❌ Erros de sintaxe PS1:" -ForegroundColor Red
+                    $errors | ForEach-Object {
+                        Write-Host " - $($_.Message)" -ForegroundColor Red
+                        Write-Log " - $($_.Message)" -ForegroundColor Red
+                    }
+                } else {
+                    Write-Host "✓ PS1 válido (sintaxe)" -ForegroundColor Green
+                    Write-Log "✓ PS1 válido (sintaxe)" -ForegroundColor Green
+                }
+            } catch {
+                Write-Host "❌ Erro PS1: $_" -ForegroundColor Red
+                Write-Log "❌ Erro PS1: $_" -ForegroundColor Red
+            }
+        }
+        'json' {
+            Validate-AndFix-Json $Path
+        }
+        'bat' {
+            Write-Host "✓ BAT básico OK (nenhuma validação profunda aplicada)" -ForegroundColor Green
+            Write-Log "✓ BAT básico OK (nenhuma validação profunda aplicada)" -ForegroundColor Green
+        }
+        'py' {
+            Write-Host "✓ PY básico OK (sem validação de sintaxe profunda)" -ForegroundColor Green
+            Write-Log "✓ PY básico OK (sem validação de sintaxe profunda)" -ForegroundColor Green
+        }
+        default {
+            Write-Host "✓ Tipo $Ext sem validação específica" -ForegroundColor Green
+            Write-Log "✓ Tipo $Ext sem validação específica" -ForegroundColor Green
+        }
+    }
+}
+
+function Validate-AndFix-Json {
+    param([string]$Path)
+    try {
+        $raw = Get-Content $Path -Raw
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        Write-Host "✓ JSON válido" -ForegroundColor Green
+        Write-Log "✓ JSON válido" -ForegroundColor Green
+    } catch {
+        Write-Host "❌ JSON inválido: $_" -ForegroundColor Red
+        Write-Log "❌ JSON inválido: $_" -ForegroundColor Red
+    }
+}
+
+# ---------- Expansão de JSON customizado (files[].path/content) ----------
+
+function Expand-CustomJsonProject {
+    param(
+        [string]$JsonPath,
+        [string]$TargetRoot
+    )
+
+    try {
+        $raw = Get-Content $JsonPath -Raw
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+
+        if (-not $obj.files) {
+            Write-Host "JSON não possui propriedade 'files'. Nada a expandir." -ForegroundColor Yellow
+            Write-Log "JSON não possui propriedade 'files'. Nada a expandir." -ForegroundColor Yellow
+            return
+        }
+
+        # Define subpasta base: project_name ou nome do JSON
+        $projectFolderName = $obj.project_name
+        if ([string]::IsNullOrWhiteSpace($projectFolderName)) {
+            $projectFolderName = [IO.Path]::GetFileNameWithoutExtension($JsonPath)
+        }
+
+        $projectRoot = Join-Path $TargetRoot $projectFolderName
+        if (-not (Test-Path $projectRoot)) {
+            New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
+        }
+
+        Write-Host "Expandindo projeto JSON em: $projectRoot" -ForegroundColor Cyan
+        Write-Log "Expandindo projeto JSON em: $projectRoot" -ForegroundColor Cyan
+
+        foreach ($file in $obj.files) {
+            $relPath = $file.path
+            $content = $file.content
+
+            if ([string]::IsNullOrWhiteSpace($relPath)) {
+                Write-Host " - Item sem 'path', ignorando." -ForegroundColor Yellow
+                continue
+            }
+
+            $normalizedRelPath = $relPath -replace '\\\\\\\\', '\\'
+            $fullPath = Join-Path $projectRoot $normalizedRelPath
+
+            $dir = Split-Path $fullPath -Parent
+            if (-not (Test-Path $dir)) {
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            }
+
+            if ($content -is [string]) {
+                $decoded = $content -replace '\\\\n', "`n"
+            } else {
+                $decoded = [string]$content
+            }
+
+            $decoded | Out-File -FilePath $fullPath -Encoding utf8 -Force
+            Write-Host " - Criado: $fullPath" -ForegroundColor Green
+            Write-Log " - Criado: $fullPath" -ForegroundColor Green
+        }
+
+        Write-Host "Expansão de projeto JSON concluída." -ForegroundColor Cyan
+        Write-Log "Expansão de projeto JSON concluída." -ForegroundColor Cyan
+    } catch {
+        Write-Host "❌ Falha ao processar JSON customizado: $_" -ForegroundColor Red
+        Write-Log "❌ Falha ao processar JSON customizado: $_" -ForegroundColor Red
+    }
+}
+
+# ---------- Remoção de comentários ----------
+
+function Remove-Comments {
+    param([string]$Content, [string]$Ext)
+
+    $lines = $Content -split "`n"
+    $filtered = @()
+
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        $trimmed = $line.Trim()
+
+        switch ($Ext.ToLower()) {
+            'ps1' {
+                # Header já foi tratado antes; aqui removemos comentários normais
+                if (-not $trimmed.StartsWith('#')) {
+                    $filtered += $line
+                }
+            }
+            'py'  {
+                if (-not $trimmed.StartsWith('#')) {
+                    $filtered += $line
+                }
+            }
+            'bat' {
+                if (-not ($trimmed.StartsWith('REM') -or $trimmed.StartsWith('@REM'))) {
+                    $filtered += $line
+                }
+            }
+            default {
+                $filtered += $line
+            }
+        }
+    }
+
+    return $filtered -join "`n"
+}
+
+# ---------- Fluxo principal ----------
+
+Write-Host "Create_file_v2.ps1 - Criando arquivo a partir do clipboard" -ForegroundColor Cyan
+
+
+
+# 1. Selecionar pasta
+$folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+$folderBrowser.Description = "Selecione a pasta de destino"
+$folderBrowser.RootFolder = 'MyComputer'
+
+if ($folderBrowser.ShowDialog() -ne 'OK') {
+    Write-Host "Criar Dialogo: Já existe! Operação cancelada." -ForegroundColor Red
+     Write-Log "Criar Dialogo: Já existe! Operação cancelada." -ForegroundColor Red
+    exit
+}
+
+$targetFolder = $folderBrowser.SelectedPath
+Write-Host "Pasta selecionada: $targetFolder" -ForegroundColor Green
+Write-Log "Pasta selecionada: $targetFolder" -ForegroundColor Green
+
+# 2. Ler clipboard
+$contentOriginal = Get-Clipboard
+if ([string]::IsNullOrWhiteSpace($contentOriginal)) {
+    Write-Host "Clipboard vazio ou inválido." -ForegroundColor Red
+    Write-Log "Clipboard vazio ou inválido." -ForegroundColor Red
+    exit
+}
+
+# 3. Salvar em TEMP e recarregar
+$tempFile = [System.IO.Path]::GetTempFileName()
+$contentOriginal | Out-File -FilePath $tempFile -Encoding utf8
+Write-Host "Conteúdo salvo temporariamente em: $tempFile" -ForegroundColor Gray
+Write-Log "Conteúdo salvo temporariamente em: $tempFile" -ForegroundColor Gray
+
+# Conteúdo que será usado ao longo do fluxo (pode ter header removido)
+# Lê todas as linhas para poder preservar a primeira linha original se quiser
+$allLines = Get-Content $tempFile -Encoding utf8
+$firstLineOriginal = $null
+if ($allLines.Count -gt 0) {
+    $firstLineOriginal = $allLines[0]
+}
+$content = $allLines -join "`n"
+
+# 4. Extrair nome do arquivo e, se header existir, remover primeira linha do conteúdo lógico
+
+Write-Host "`nDetectando nome do arquivo..." -ForegroundColor Cyan
+Write-Log "`nDetectando nome do arquivo..." -ForegroundColor Cyan
+
+
+
+
+$headerRemovedContent = ''
+$filename = Extract-HeaderFilename -AllLines $allLines `
+                                   -HeaderLineRemovedContent ([ref]$headerRemovedContent) `
+                                   -HeaderLineIndex ([ref]$headerLineIndex)
+
+$headerFound = $false
+if ($filename) {
+    $headerFound = $true
+    Write-Host "✓ Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename" -ForegroundColor Green
+    Write-Log  "Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename"
+
+    if (-not [string]::IsNullOrWhiteSpace($headerRemovedContent)) {
+        $content = $headerRemovedContent
+    }
+} else {
+    Write-Host "❌ Nenhum header de nome encontrado nas primeiras linhas" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome; usando metadados/timestamp."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+
+# Proteção extra: se ainda vier vazio por algum bug, força fallback
+if (-not $filename) {
+    Write-Host "⚠ Nome ainda vazio após metadados. Usando fallback com timestamp." -ForegroundColor Yellow
+    Write-Log  "Nome vazio após metadados, forçando fallback."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+
+
+
+# 5. Detectar extensão se não tiver
+if ($filename -notmatch '\\.\\w+$') {
+    $ext = Detect-ContentExtension -Content $content
+    Write-Host "Extensão detectada: .$ext" -ForegroundColor Magenta
+    Write-Log "Extensão detectada: .$ext" -ForegroundColor Magenta
+    $filename = "$filename.$ext"
+}
+
+$proposedPath = Join-Path $targetFolder $filename
+Write-Host "`nArquivo proposto: $proposedPath" -ForegroundColor Cyan
+Write-Log "`nArquivo proposto: $proposedPath" -ForegroundColor Cyan
+
+
+# ---------- Menu interativo ----------
+
+$exit = $false
+
+do {
+    Clear-Host
+    Write-Host "=== MENU Create_file_v2 ===" -ForegroundColor Cyan
+
+    Write-Host "Pasta destino : $targetFolder" -ForegroundColor White
+    Write-Host "Nome detectado: $filename" -ForegroundColor White
+    Write-Host "Temp file     : $tempFile" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "1. Validar conteúdo" -ForegroundColor White
+    Write-Host "2. Remover comentários (cria _clean.tmp)" -ForegroundColor White
+    Write-Host "3. Gravar em: $proposedPath (com backup em Obsoleto)" -ForegroundColor White
+    Write-Host "4. Copiar nome para clipboard" -ForegroundColor White
+    Write-Host "5. Expandir JSON customizado (files[].path/content)" -ForegroundColor White
+    Write-Host "6. Sair" -ForegroundColor White
+    
+    $choice = Read-Host "Escolha (1-6)"
+
+    switch ($choice) {
+        '1' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+            Validate-Script -Path $tempFile -Ext $ext
+            Read-Host "Pressione Enter para continuar"
+        }
+        '2' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+            $cleanContent = Remove-Comments -Content $content -Ext $ext
+            $cleanTemp = $tempFile -replace '\\.tmp$', '_clean.tmp'
+            $cleanContent | Out-File -FilePath $cleanTemp -Encoding utf8
+            Set-Clipboard $cleanContent
+            Write-Host "✓ Comentários removidos em: $cleanTemp" -ForegroundColor Green
+            Write-Log "✓ Comentários removidos em: $cleanTemp" -ForegroundColor Green
+            Write-Host "Conteúdo limpo copiado para clipboard" -ForegroundColor Green
+            Write-Log "Conteúdo limpo copiado para clipboard" -ForegroundColor Green
+            Read-Host "Pressione Enter para continuar"
+        }
+        '3' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+
+            # Pergunta se quer re-inserir a linha de header, caso ela tenha sido detectada
+            $finalContent = $content
+            if ($headerFound -and $firstLineOriginal) {
+                $resp = Read-Host "Adicionar a primeira linha original no topo do arquivo final? (S/N)"
+                if ($resp -eq 'S' -or $resp -eq 's') {
+                    # Reinsere a linha original completa, ex:
+                    # "# meu_script.ps1 - Script de teste"
+                    $finalContent = "$firstLineOriginal`n$finalContent"
+                }
+            }
+
+            # Grava o conteúdo final em um arquivo temporário dedicado à validação/gravação
+            $finalTemp = [System.IO.Path]::GetTempFileName()
+            $finalContent | Out-File -FilePath $finalTemp -Encoding utf8
+
+            Validate-Script -Path $finalTemp -Ext $ext
+
+            # Controle de versões em Obsoleto
+            $confirm = Read-Host "Confirmar gravação em $proposedPath? (S/N)"
+            if ($confirm -eq 'S' -or $confirm -eq 's') {
+                $destPath = $proposedPath
+                $obsoletoDir = Join-Path $targetFolder 'Obsoleto'
+
+                if (Test-Path $destPath) {
+                    Write-Host "Arquivo já existe. Preparando backup em Obsoleto..." -ForegroundColor Yellow
+
+                    if (-not (Test-Path $obsoletoDir)) {
+                        New-Item -Path $obsoletoDir -ItemType Directory -Force | Out-Null
+                        (Get-Item $obsoletoDir).Attributes = 'Hidden'
+                        Write-Host "Pasta Obsoleto criada e ocultada: $obsoletoDir" -ForegroundColor Green
+                    }
+
+                    $nameWithoutExt = [IO.Path]::GetFileNameWithoutExtension($filename)
+                    $extWithDot    = [IO.Path]::GetExtension($filename)   # isso retorna ".ps1"
+                    $backupName    = Get-NextBackupName -baseName $nameWithoutExt -extension $extWithDot -directory $obsoletoDir
+                    $backupPath    = Join-Path $obsoletoDir $backupName
+
+                    Copy-Item -Path $destPath -Destination $backupPath -Force
+                    Write-Host "Backup criado: $backupPath" -ForegroundColor Green
+                }
+
+                Copy-Item -Path $finalTemp -Destination $destPath -Force
+                Write-Host "✓ Arquivo salvo: $destPath" -ForegroundColor Green
+            }
+
+            Remove-Item $finalTemp -Force -ErrorAction SilentlyContinue
+            Read-Host "Pressione Enter para continuar"
+        }
+        '4' {
+            Set-Clipboard $filename
+            Write-Host "✓ Nome '$filename' copiado para clipboard" -ForegroundColor Green
+            Write-Log "✓ Nome '$filename' copiado para clipboard" -ForegroundColor Green
+            Read-Host "Pressione Enter para continuar"
+        }
+        '5' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+            if ($ext -ne 'json') {
+                Write-Host "Esta opção é específica para arquivos JSON." -ForegroundColor Yellow
+            } else {
+                Expand-CustomJsonProject -JsonPath $tempFile -TargetRoot $targetFolder
+            }
+            Read-Host "Pressione Enter para continuar"
+        }
+        '6' { $exit = $true }
+        default {
+            Write-Host "Opção inválida!" -ForegroundColor Red
+            Write-Log "Opção inválida!" -ForegroundColor Red
+            Start-Sleep -Seconds 2
+        }
+    }
+} while (-not $exit)
+
+# ---------- Limpeza ----------
+
+Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+Write-Host "Sessão finalizada." -ForegroundColor Cyan
+Write-Log "Sessão finalizada." -ForegroundColor Cyan
+
+
+DAQUI PARA FRENTE É DIAGNOSTICO
+
+O script em si agora está estruturado de forma correta para o logging: `Write-Log` é definido logo após o `Add-Type` e antes de qualquer uso, então aquele erro inicial de “Write-Log não reconhecido” não deveria mais acontecer com **este** conteúdo. [stackoverflow](https://stackoverflow.com/questions/3917592/why-do-i-need-to-have-my-functions-written-first-in-my-powershell-script)
+
+O que precisa de ajuste agora são alguns detalhes internos:
+
+***
+
+## 1. Funções duplicadas e blocos repetidos
+
+Você tem blocos **repetidos** de funções:
+
+- `Extract-AnyCommentFilename`
+- `Get-FilenameFallbackWithTimestamp`
+- `Extract-JsonMetadata`
+- `Extract-CommentMetadata`
+
+Eles aparecem duas vezes em sequência (um bloco completo e depois um outro bloco quase igual). Isso não costuma quebrar o script, mas:
+
+- Deixa o código confuso.
+- Se as versões forem levemente diferentes, você pode pensar que está mudando algo e, na verdade, está mexendo “na cópia errada”.
+
+Sugestão direta:
+
+- Deixe **apenas um** bloco de cada função.
+- Apague o segundo conjunto duplicado dessas funções.
+
+***
+
+## 2. `Extract-HeaderFilename` está sendo usada, mas não está definida
+
+No fluxo principal você faz:
+
+```powershell
+$headerRemovedContent = ''
+$filename = Extract-HeaderFilename -AllLines $allLines `
+                                   -HeaderLineRemovedContent ([ref]$headerRemovedContent) `
+                                   -HeaderLineIndex ([ref]$headerLineIndex)
+```
+
+Mas **não há** definição da função `Extract-HeaderFilename` acima no script que você colou; você ainda tem a função antiga `Extract-FirstLineFilename`, que não está mais sendo usada. É isso que vai quebrar na próxima execução (cmdlet não reconhecido).
+
+Você tem duas opções:
+
+### Opção A – Voltar a usar `Extract-FirstLineFilename` (mais simples)
+
+Trocar o trecho do fluxo principal para:
+
+```powershell
+$headerRemovedContent = ''
+$filename = Extract-FirstLineFilename -Path $tempFile -HeaderLineRemovedContent ([ref]$headerRemovedContent)
+
+$headerFound = $false
+if ($filename) {
+    $headerFound = $true
+    Write-Host "✓ Header de nome detectado na primeira linha: $filename" -ForegroundColor Green
+    Write-Log  "Header de nome detectado na primeira linha: $filename"
+
+    if (-not [string]::IsNullOrWhiteSpace($headerRemovedContent)) {
+        $content = $headerRemovedContent
+    }
+} else {
+    Write-Host "❌ Nenhum header de nome encontrado na primeira linha" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome; usando metadados/timestamp."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+E remover qualquer referência a `$headerLineIndex` e `Extract-HeaderFilename`. Isso volta para a lógica “header só na primeira linha” e usa comentários/metadados quando não achar.
+
+### Opção B – Criar a função `Extract-HeaderFilename` (se quiser header também na segunda linha)
+
+Se você quiser manter a inteligência de usar a segunda linha como header (caso típico do Python com shebang), precisa adicionar esta função completa acima do fluxo principal:
+
+```powershell
+function Extract-HeaderFilename {
+    param(
+        [string[]]$AllLines,
+        [ref]$HeaderLineRemovedContent,
+        [ref]$HeaderLineIndex
+    )
+
+    $HeaderLineIndex.Value = -1
+
+    if (-not $AllLines -or $AllLines.Count -eq 0) {
+        return $null
+    }
+
+    # 1) Tenta primeira linha como header, desde que NÃO seja shebang
+    $line0 = $AllLines[0]
+    if ($line0 -notmatch '^\s*#!') {
+        if ($line0 -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $HeaderLineIndex.Value = 0
+            $HeaderLineRemovedContent.Value = ($AllLines | Select-Object -Skip 1) -join "`n"
+            return $matches [stackoverflow](https://stackoverflow.com/questions/3917592/why-do-i-need-to-have-my-functions-written-first-in-my-powershell-script).Trim()
+        }
+    }
+
+    # 2) Se houver segunda linha, tenta ela como header
+    if ($AllLines.Count -gt 1) {
+        $line1 = $AllLines [stackoverflow](https://stackoverflow.com/questions/3917592/why-do-i-need-to-have-my-functions-written-first-in-my-powershell-script)
+        if ($line1 -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $HeaderLineIndex.Value = 1
+            # Remove a linha 1, preservando a 0
+            $HeaderLineRemovedContent.Value = @($AllLines[0]) + ($AllLines | Select-Object -Skip 2)
+            $HeaderLineRemovedContent.Value = $HeaderLineRemovedContent.Value -join "`n"
+            return $matches [stackoverflow](https://stackoverflow.com/questions/3917592/why-do-i-need-to-have-my-functions-written-first-in-my-powershell-script).Trim()
+        }
+    }
+
+    return $null
+}
+```
+
+Aí o bloco do fluxo principal que usa `Extract-HeaderFilename` passa a funcionar.
+
+***
+
+## 3. `Write-Log` está OK agora
+
+Do jeito que você colou:
+
+```powershell
+Add-Type -AssemblyName System.Windows.Forms
+
+# ---------- Logging ----------
+
+$logFile = Join-Path $env:TEMP 'Create_file_v3.log'
+
+function Write-Log { ... }
+```
+
+e só depois:
+
+```powershell
+Write-Host "Create_file_v2.ps1 - Criando arquivo a partir do clipboard" -ForegroundColor Cyan
+```
+
+está correto: a função já existe quando o script chega aqui, então aquele erro de “Write-Log não reconhecido” não deve acontecer nessa versão. [gist.github](https://gist.github.com/9to5IT/9620565?permalink_comment_id=4094765)
+
+***
+
+## 4. Próximo passo prático
+
+Se quiser, para evitar mais “drift”, posso:
+
+- Montar um `Create_file_v3` **completo**, partindo do que você já tem e aplicando:
+  - remoção de duplicatas de funções;
+  - inclusão da `Extract-HeaderFilename`;
+  - logging já integrado;
+  - controle de versões em Obsoleto;
+  - heurística de extensão;
+  - saída do menu corrigida.
+
+Você então substituiria o arquivo atual por essa versão consolidada. Se topar, me diga “pode mandar o v3 consolidado” que eu preparo em cima dessa base que você colou.
+
+
+
+=========================VALIDAÇÃO SEM PATCH================================
+
+qual dos dois eu uso:                              1 -    function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) { Write-Host "✓ Fallback: $fn" -ForegroundColor Green 
+    Write-Log "Nome por fallback timestamp: $fn"}
+    return $fn
+}
+
+function Extract-JsonMetadata {
+    param([string]$Content)
+    if ($Content -match '"filename"\\s*:\\s*"([^"]+\\.\\w+)"') {
+        return $matches[1].Trim()
+    }
+    return $null
+}                                                           ou este    2-    function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) { Write-Host "✓ Fallback: $fn" -ForegroundColor Green 
+    Write-Log "Nome por fallback timestamp: $fn"}
+    return $fn
+}
+
+function Extract-JsonMetadata {
+    param([string]$Content)
+    if ($Content -match '"filename"\\s*:\\s*"([^"]+\\.\\w+)"') {
+        return $matches[1].Trim()
+    }
+    return $null
+}
+
+Os dois trechos que você colou são, na prática, idênticos: mesma função `Get-FilenameFallbackWithTimestamp` e mesma `Extract-JsonMetadata`. Não há diferença lógica entre o “1” e o “2”. [learn.microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions?view=powershell-7.6)
+
+O que você precisa é:
+
+- Manter **apenas UMA** definição de `Get-FilenameFallbackWithTimestamp`.
+- Manter **apenas UMA** definição de `Extract-JsonMetadata`.
+- Apagar qualquer bloco duplicado.
+
+Então:
+
+- Pode escolher qualquer um dos dois blocos e deixar só ele.
+- O importante é que, no arquivo final, exista um único:
+
+```powershell
+function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) { 
+        Write-Host "✓ Fallback: $fn" -ForegroundColor Green 
+        Write-Log "Nome por fallback timestamp: $fn"
+    }
+    return $fn
+}
+
+function Extract-JsonMetadata {
+    param([string]$Content)
+    if ($Content -match '"filename"\s*:\s*"([^"]+\.\w+)"') {
+        return $matches [learn.microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_functions?view=powershell-7.6).Trim()
+    }
+    return $null
+}
+```
+
+Resumo: escolha um, apague o outro, e garanta que não haja versões duplicadas dessas funções no script.
+
+=========================VALIDAÇÃO SEM PATCH================================
+
+você tem que tomar cuidado com o restante do scritp, essas diferenças são resultado de seu aperfeiçoamento do script, se não vamos reintroduzir bugs.
+
+Você tem razão em se preocupar: se misturar blocos antigos com novos, a gente reintroduz bug sem perceber. A partir de agora, vou tratar **sempre** o script como um todo coerente, não só pedaços soltos.
+
+Para evitar regressão, o caminho mais seguro é:
+
+- Partir **da versão que você acabou de colar** (com logging, Obsoleto, comentários comuns, etc.).
+- Limpar duplicações e inconsistências **sem remover nenhuma melhoria** já feita.
+- Te devolver um `Create_file_v3.ps1` consolidado único, para substituir o atual.
+
+Se você quiser seguir assim, me responde só:
+
+> “pode montar o v3 consolidado em cima deste último script”
+
+que na próxima mensagem eu:
+
+1. Uso exatamente esse conteúdo que você mandou como base.
+2. Removo funções duplicadas (`Extract-AnyCommentFilename`, `Extract-JsonMetadata`, `Extract-CommentMetadata`, `Get-FilenameFallbackWithTimestamp`).
+3. Garante que:
+   - `Extract-HeaderFilename` exista (se for usada).
+   - `Write-Log` esteja definido e usado corretamente.
+   - Nenhuma melhoria que já funcionou (shebang, REM/::, comentários comuns, Obsoleto, menu sair) seja perdida.
+
+Aí você só cola esse v3 final no arquivo e paramos de “remendar” por blocos separados.
+
+
+=========================VALIDAÇÃO SEM PATCH================================
+
+“pode montar o v3 consolidado em cima deste último script”
+
+Vou montar o Create_file_v3.ps1 consolidado em cima do script que você enviou, mantendo todas as melhorias e limpando duplicações.
+
+O que foi feito
+Mantidos:
+
+Logging em %TEMP%\Create_file_v3.log.
+
+Detecção de header em comentário (#, REM, ::, //, ;) na primeira linha.
+
+Busca de nome em:
+
+"filename" JSON.
+
+@FILE: nome.ext.
+
+Comentários comuns com nome.ext em qualquer linha.
+
+Detecção de extensão pelo conteúdo.
+
+Backup em Obsoleto com _V01, _V02 etc.
+
+Opção de recolocar a primeira linha original no arquivo final.
+
+Corrigidos:
+
+Removidas funções duplicadas.
+
+Adicionada a função Extract-HeaderFilename (que você estava usando, mas não tinha definição).
+
+Write-Log sempre definido antes de qualquer uso.
+
+Removidos usos indevidos de Write-Log com parâmetros de Write-Host.
+
+=========================VALIDAÇÃO SEM PATCH================================
+
+Create_file_v3.ps1 consolidado
+
+# Utilitário para criar arquivo a partir do clipboard com validação, menu,
+# suporte a JSON customizado, detecção avançada de nome de arquivo,
+# logging e controle de versões em pasta Obsoleto.
+
+Add-Type -AssemblyName System.Windows.Forms
+
+# ---------- Logging ----------
+
+$logFile = Join-Path $env:TEMP 'Create_file_v3.log'
+
+function Write-Log {
+    param(
+        [string]$Message
+    )
+    try {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        "$timestamp`t$Message" | Out-File -FilePath $logFile -Encoding utf8 -Append
+    } catch {
+        # Se o log falhar, não quebra o script
+    }
+}
+
+# ---------- Versão de backup em Obsoleto ----------
+
+function Get-NextBackupName {
+    param(
+        [string]$baseName,
+        [string]$extension,  # com ponto, ex: ".ps1"
+        [string]$directory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($extension)) {
+        $extension = ''
+    }
+
+    $escapedBase = [regex]::Escape($baseName)
+    $escapedExt  = [regex]::Escape($extension)
+    $pattern = "^${escapedBase}_V(\d{2})${escapedExt}$"
+
+    $numbers = @()
+
+    Get-ChildItem -Path $directory -File -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -match $pattern) {
+            $n = [int]$matches[1]
+            $numbers += $n
+        }
+    }
+
+    if ($numbers.Count -gt 0) {
+        $nextNum = ($numbers | Measure-Object -Maximum).Maximum + 1
+    } else {
+        $nextNum = 1
+    }
+
+    $suffix = $nextNum.ToString().PadLeft(2, '0')
+    return ($baseName + '_V' + $suffix + $extension)
+}
+
+# ---------- Header de nome em primeiras linhas ----------
+
+function Extract-HeaderFilename {
+    param(
+        [string[]]$AllLines,
+        [ref]$HeaderLineRemovedContent,
+        [ref]$HeaderLineIndex
+    )
+
+    $HeaderLineIndex.Value = -1
+
+    if (-not $AllLines -or $AllLines.Count -eq 0) {
+        return $null
+    }
+
+    # 1) Tenta primeira linha como header, desde que NÃO seja shebang
+    $line0 = $AllLines[0]
+    if ($line0 -notmatch '^\s*#!') {
+        if ($line0 -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $HeaderLineIndex.Value = 0
+            $HeaderLineRemovedContent.Value = ($AllLines | Select-Object -Skip 1) -join "`n"
+            return $matches[1].Trim()
+        }
+    }
+
+    # 2) Se houver segunda linha, tenta ela como header
+    if ($AllLines.Count -gt 1) {
+        $line1 = $AllLines[1]
+        if ($line1 -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $HeaderLineIndex.Value = 1
+            # Remove a linha 1, preservando a 0 (ex.: shebang)
+            $HeaderLineRemovedContent.Value = @($AllLines[0]) + ($AllLines | Select-Object -Skip 2)
+            $HeaderLineRemovedContent.Value = $HeaderLineRemovedContent.Value -join "`n"
+            return $matches[1].Trim()
+        }
+    }
+
+    return $null
+}
+
+# ---------- Busca de nome em JSON / comentários ----------
+
+function Extract-JsonMetadata {
+    param([string]$Content)
+    if ($Content -match '"filename"\s*:\s*"([^"]+\.\w+)"') {
+        return $matches[1].Trim()
+    }
+    return $null
+}
+
+function Extract-CommentMetadata {
+    param([string]$Content)
+
+    # Aceita linhas como:
+    #   # @FILE: nome.ext
+    #   @FILE: nome.ext
+    #   // @FILE: nome.ext
+    #   ; @FILE: nome.ext
+    #   REM @FILE: nome.ext
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\s*(?:#|//|;|REM\b|rem\b|::)?\s*@FILE:\s*(.+\.\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Extract-AnyCommentFilename {
+    param([string]$Content)
+
+    # Comentários comuns com algo tipo nome.ext em QUALQUER linha
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $matchesList += $matches[1].Trim()
+        }
+    }
+
+    return $matchesList
+}
+
+function Select-FilenameFromList {
+    param(
+        [string[]]$Names
+    )
+
+    if (-not $Names -or $Names.Count -eq 0) {
+        return $null
+    }
+
+    if ($Names.Count -eq 1) {
+        return $Names[0]
+    }
+
+    Write-Host "Vários candidatos a nome de arquivo encontrados:" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Names.Count; $i++) {
+        Write-Host ("{0}. {1}" -f ($i + 1), $Names[$i]) -ForegroundColor White
+    }
+
+    while ($true) {
+        $choice = Read-Host ("Escolha o número desejado (1-{0}, ou Enter para cancelar)" -f $Names.Count)
+        if ([string]::IsNullOrWhiteSpace($choice)) {
+            return $null
+        }
+        if ($choice -as [int] -and $choice -ge 1 -and $choice -le $Names.Count) {
+            return $Names[$choice - 1]
+        }
+        Write-Host "Opção inválida." -ForegroundColor Red
+    }
+}
+
+function Get-FilenameFromMetadata {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    if ($Verbose) { Write-Host "Buscando metadata JSON (\"filename\")..." -ForegroundColor Yellow }
+    $fn = Extract-JsonMetadata $Content
+    if ($fn) {
+        if ($Verbose) { Write-Host "✓ JSON: $fn" -ForegroundColor Green }
+        Write-Log "Nome detectado via JSON: $fn"
+        return $fn
+    }
+
+    if ($Verbose) { Write-Host "Buscando @FILE nos comentários..." -ForegroundColor Yellow }
+    $allFromComments = Extract-CommentMetadata $Content
+    if ($allFromComments -and $allFromComments.Count -gt 0) {
+        $chosen = Select-FilenameFromList -Names $allFromComments
+        if ($chosen) {
+            if ($Verbose) { Write-Host "✓ Comentário (@FILE): $chosen" -ForegroundColor Green }
+            Write-Log "Nome selecionado via @FILE: $chosen"
+            return $chosen
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de @FILE." -ForegroundColor Yellow }
+        }
+    }
+
+    if ($Verbose) { Write-Host "Buscando nome em comentários gerais (#, REM, ::, //, ;)..." -ForegroundColor Yellow }
+    $allFromAnyComments = Extract-AnyCommentFilename $Content
+    if ($allFromAnyComments -and $allFromAnyComments.Count -gt 0) {
+        $chosen2 = Select-FilenameFromList -Names $allFromAnyComments
+        if ($chosen2) {
+            if ($Verbose) { Write-Host "✓ Comentário (genérico): $chosen2" -ForegroundColor Green }
+            Write-Log "Nome selecionado via comentário genérico: $chosen2"
+            return $chosen2
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de comentários genéricos." -ForegroundColor Yellow }
+        }
+    }
+
+    return $null
+}
+
+function Get-FilenameFallbackWithTimestamp {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    # 1) Tenta metadados (JSON, @FILE:, comentários comuns)
+    $fn = Get-FilenameFromMetadata -Content $Content -Verbose:$Verbose
+    if ($fn) { return $fn }
+
+    # 2) Se nada encontrado, gera nome com timestamp
+    if ($Verbose) { Write-Host "Usando fallback com timestamp..." -ForegroundColor Yellow }
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $fn = "script_$timestamp"
+    if ($Verbose) {
+        Write-Host "✓ Fallback: $fn" -ForegroundColor Green
+    }
+    Write-Log "Nome por fallback timestamp: $fn"
+    return $fn
+}
+
+# ---------- Detecção de extensão ----------
+
+function Detect-ContentExtension {
+    param([string]$Content)
+
+    $firstNonEmpty = ($Content -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 10) -join "`n"
+
+    # Python
+    if ($firstNonEmpty -match '^\s*#\s*!/usr/bin/env\s+python' -or
+        $firstNonEmpty -match '^\s*import\s+\w+' -or
+        $firstNonEmpty -match '^\s*from\s+\w+\s+import\s+' -or
+        $firstNonEmpty -match '^\s*def\s+\w+\(') {
+        return 'py'
+    }
+
+    # PowerShell
+    if ($firstNonEmpty -match '^\s*param\(' -or
+        $firstNonEmpty -match 'Write-Host' -or
+        $firstNonEmpty -match '\$PSVersionTable' -or
+        $firstNonEmpty -match '^\s*function\s+\w+\s*\{' -or
+        $firstNonEmpty -match '^\s*\[CmdletBinding\(') {
+        return 'ps1'
+    }
+
+    # BAT / CMD
+    if ($firstNonEmpty -match '^\s*@echo\s+off' -or
+        $firstNonEmpty -match '^\s*REM\s' -or
+        $firstNonEmpty -match '^\s*goto\s+\w+') {
+        return 'bat'
+    }
+
+    # JSON
+    if ($firstNonEmpty -match '^\s*[\{\[]' -and $Content -match '":\s*') {
+        return 'json'
+    }
+
+    return 'txt'
+}
+
+# ---------- Validação de conteúdo ----------
+
+function Validate-Script {
+    param([string]$Path, [string]$Ext)
+
+    switch ($Ext.ToLower()) {
+        'ps1' {
+            try {
+                $errors = $null
+                [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$null, [ref]$errors) | Out-Null
+                if ($errors -and $errors.Count -gt 0) {
+                    Write-Host "❌ Erros de sintaxe PS1:" -ForegroundColor Red
+                    $errors | ForEach-Object {
+                        Write-Host " - $($_.Message)" -ForegroundColor Red
+                        Write-Log "Erro de sintaxe PS1: $($_.Message)"
+                    }
+                } else {
+                    Write-Host "✓ PS1 válido (sintaxe)" -ForegroundColor Green
+                    Write-Log "PS1 válido (sintaxe): $Path"
+                }
+            } catch {
+                Write-Host "❌ Erro PS1: $_" -ForegroundColor Red
+                Write-Log "Erro ao validar PS1: $_"
+            }
+        }
+        'json' {
+            Validate-AndFix-Json $Path
+        }
+        'bat' {
+            Write-Host "✓ BAT básico OK (nenhuma validação profunda aplicada)" -ForegroundColor Green
+            Write-Log "BAT validado (básico): $Path"
+        }
+        'py' {
+            Write-Host "✓ PY básico OK (sem validação de sintaxe profunda)" -ForegroundColor Green
+            Write-Log "PY validado (básico): $Path"
+        }
+        default {
+            Write-Host "✓ Tipo $Ext sem validação específica" -ForegroundColor Green
+            Write-Log "Validado tipo genérico ($Ext): $Path"
+        }
+    }
+}
+
+function Validate-AndFix-Json {
+    param([string]$Path)
+    try {
+        $raw = Get-Content $Path -Raw
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        Write-Host "✓ JSON válido" -ForegroundColor Green
+        Write-Log "JSON válido: $Path"
+    } catch {
+        Write-Host "❌ JSON inválido: $_" -ForegroundColor Red
+        Write-Log "JSON inválido: $Path - $_"
+    }
+}
+
+# ---------- Expansão de JSON customizado (files[].path/content) ----------
+
+function Expand-CustomJsonProject {
+    param(
+        [string]$JsonPath,
+        [string]$TargetRoot
+    )
+
+    try {
+        $raw = Get-Content $JsonPath -Raw
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+
+        if (-not $obj.files) {
+            Write-Host "JSON não possui propriedade 'files'. Nada a expandir." -ForegroundColor Yellow
+            Write-Log "JSON sem 'files', nada a expandir: $JsonPath"
+            return
+        }
+
+        $projectFolderName = $obj.project_name
+        if ([string]::IsNullOrWhiteSpace($projectFolderName)) {
+            $projectFolderName = [IO.Path]::GetFileNameWithoutExtension($JsonPath)
+        }
+
+        $projectRoot = Join-Path $TargetRoot $projectFolderName
+        if (-not (Test-Path $projectRoot)) {
+            New-Item -ItemType Directory -Path $projectRoot -Force | Out-Null
+        }
+
+        Write-Host "Expandindo projeto JSON em: $projectRoot" -ForegroundColor Cyan
+        Write-Log "Expandindo JSON custom: $JsonPath -> $projectRoot"
+
+        foreach ($file in $obj.files) {
+            $relPath = $file.path
+            $content = $file.content
+
+            if ([string]::IsNullOrWhiteSpace($relPath)) {
+                Write-Host " - Item sem 'path', ignorando." -ForegroundColor Yellow
+                Write-Log "Item JSON sem 'path' ignorado em: $JsonPath"
+                continue
+            }
+
+            $normalizedRelPath = $relPath -replace '\\\\', '\'
+            $fullPath = Join-Path $projectRoot $normalizedRelPath
+
+            $dir = Split-Path $fullPath -Parent
+            if (-not (Test-Path $dir)) {
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            }
+
+            if ($content -is [string]) {
+                $decoded = $content -replace '\\n', "`n"
+            } else {
+                $decoded = [string]$content
+            }
+
+            $decoded | Out-File -FilePath $fullPath -Encoding utf8 -Force
+            Write-Host " - Criado: $fullPath" -ForegroundColor Green
+            Write-Log "Criado arquivo de expansão: $fullPath"
+        }
+
+        Write-Host "Expansão de projeto JSON concluída." -ForegroundColor Cyan
+    } catch {
+        Write-Host "❌ Falha ao processar JSON customizado: $_" -ForegroundColor Red
+        Write-Log "Falha ao expandir JSON customizado: $JsonPath - $_"
+    }
+}
+
+# ---------- Remoção de comentários ----------
+
+function Remove-Comments {
+    param([string]$Content, [string]$Ext)
+
+    $lines = $Content -split "`n"
+    $filtered = @()
+
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        $trimmed = $line.Trim()
+
+        switch ($Ext.ToLower()) {
+            'ps1' {
+                if (-not $trimmed.StartsWith('#')) {
+                    $filtered += $line
+                }
+            }
+            'py'  {
+                if (-not $trimmed.StartsWith('#')) {
+                    $filtered += $line
+                }
+            }
+            'bat' {
+                if (-not ($trimmed.StartsWith('REM') -or $trimmed.StartsWith('@REM') -or $trimmed.StartsWith('::'))) {
+                    $filtered += $line
+                }
+            }
+            default {
+                $filtered += $line
+            }
+        }
+    }
+
+    return $filtered -join "`n"
+}
+
+# ---------- Fluxo principal ----------
+
+Write-Host "Create_file_v3.ps1 - Criando arquivo a partir do clipboard" -ForegroundColor Cyan
+Write-Log "Iniciando execução do script."
+
+# 1. Selecionar pasta
+$folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+$folderBrowser.Description = "Selecione a pasta de destino"
+$folderBrowser.RootFolder = 'MyComputer'
+
+if ($folderBrowser.ShowDialog() -ne 'OK') {
+    Write-Host "Operação cancelada." -ForegroundColor Red
+    Write-Log "Operação cancelada no seletor de pasta."
+    exit
+}
+
+$targetFolder = $folderBrowser.SelectedPath
+Write-Host "Pasta selecionada: $targetFolder" -ForegroundColor Green
+Write-Log "Pasta selecionada: $targetFolder"
+
+# 2. Ler clipboard
+$contentOriginal = Get-Clipboard
+if ([string]::IsNullOrWhiteSpace($contentOriginal)) {
+    Write-Host "Clipboard vazio ou inválido." -ForegroundColor Red
+    Write-Log "Clipboard vazio ou inválido. Encerrando."
+    exit
+}
+
+# 3. Salvar em TEMP e recarregar
+$tempFile = [System.IO.Path]::GetTempFileName()
+$contentOriginal | Out-File -FilePath $tempFile -Encoding utf8
+Write-Host "Conteúdo salvo temporariamente em: $tempFile" -ForegroundColor Gray
+Write-Log "Conteúdo salvo em temp: $tempFile"
+
+$allLines = Get-Content $tempFile -Encoding utf8
+$firstLineOriginal = $null
+if ($allLines.Count -gt 0) {
+    $firstLineOriginal = $allLines[0]
+}
+$content = $allLines -join "`n"
+
+# 4. Extrair nome do arquivo
+
+Write-Host "`nDetectando nome do arquivo..." -ForegroundColor Cyan
+Write-Log "Detectando nome do arquivo..."
+
+$headerRemovedContent = ''
+$headerLineIndex = -1
+$filename = Extract-HeaderFilename -AllLines $allLines `
+                                   -HeaderLineRemovedContent ([ref]$headerRemovedContent) `
+                                   -HeaderLineIndex ([ref]$headerLineIndex)
+
+$headerFound = $false
+if ($filename) {
+    $headerFound = $true
+    Write-Host "✓ Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename" -ForegroundColor Green
+    Write-Log  "Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename"
+
+    if (-not [string]::IsNullOrWhiteSpace($headerRemovedContent)) {
+        $content = $headerRemovedContent
+    }
+} else {
+    Write-Host "❌ Nenhum header de nome encontrado nas primeiras linhas" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome; usando metadados/timestamp."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+
+if (-not $filename) {
+    Write-Host "⚠ Nome ainda vazio após metadados. Usando fallback com timestamp." -ForegroundColor Yellow
+    Write-Log  "Nome vazio após metadados, forçando fallback."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+
+# 5. Detectar extensão se não tiver
+if ($filename -notmatch '\.\w+$') {
+    $ext = Detect-ContentExtension -Content $content
+    Write-Host "Extensão detectada: .$ext" -ForegroundColor Magenta
+    Write-Log "Extensão detectada: .$ext para $filename"
+    $filename = "$filename.$ext"
+}
+
+$proposedPath = Join-Path $targetFolder $filename
+Write-Host "`nArquivo proposto: $proposedPath" -ForegroundColor Cyan
+Write-Log "Arquivo proposto: $proposedPath"
+
+# ---------- Menu interativo ----------
+
+$exit = $false
+
+do {
+    Clear-Host
+    Write-Host "=== MENU Create_file_v3 ===" -ForegroundColor Cyan
+    Write-Host "Pasta destino : $targetFolder" -ForegroundColor White
+    Write-Host "Nome detectado: $filename" -ForegroundColor White
+    Write-Host "Temp file     : $tempFile" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "1. Validar conteúdo" -ForegroundColor White
+    Write-Host "2. Remover comentários (cria _clean.tmp)" -ForegroundColor White
+    Write-Host "3. Gravar em: $proposedPath (com backup em Obsoleto)" -ForegroundColor White
+    Write-Host "4. Copiar nome para clipboard" -ForegroundColor White
+    Write-Host "5. Expandir JSON customizado (files[].path/content)" -ForegroundColor White
+    Write-Host "6. Sair" -ForegroundColor White
+
+    $choice = Read-Host "Escolha (1-6)"
+
+    switch ($choice) {
+        '1' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+            Validate-Script -Path $tempFile -Ext $ext
+            Read-Host "Pressione Enter para continuar"
+        }
+        '2' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+            $cleanContent = Remove-Comments -Content $content -Ext $ext
+            $cleanTemp = $tempFile -replace '\.tmp$', '_clean.tmp'
+            $cleanContent | Out-File -FilePath $cleanTemp -Encoding utf8
+            Set-Clipboard $cleanContent
+            Write-Host "✓ Comentários removidos em: $cleanTemp" -ForegroundColor Green
+            Write-Log "Comentários removidos em: $cleanTemp"
+            Write-Host "Conteúdo limpo copiado para clipboard" -ForegroundColor Green
+            Write-Log "Conteúdo limpo copiado para clipboard"
+            Read-Host "Pressione Enter para continuar"
+        }
+        '3' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+
+            $finalContent = $content
+            if ($headerFound -and $firstLineOriginal) {
+                $resp = Read-Host "Adicionar a primeira linha original no topo do arquivo final? (S/N)"
+                if ($resp -eq 'S' -or $resp -eq 's') {
+                    $finalContent = "$firstLineOriginal`n$finalContent"
+                }
+            }
+
+            $finalTemp = [System.IO.Path]::GetTempFileName()
+            $finalContent | Out-File -FilePath $finalTemp -Encoding utf8
+
+            Validate-Script -Path $finalTemp -Ext $ext
+
+            $confirm = Read-Host "Confirmar gravação em $proposedPath? (S/N)"
+            if ($confirm -eq 'S' -or $confirm -eq 's') {
+                $destPath = $proposedPath
+                $obsoletoDir = Join-Path $targetFolder 'Obsoleto'
+
+                if (Test-Path $destPath) {
+                    Write-Host "Arquivo já existe. Preparando backup em Obsoleto..." -ForegroundColor Yellow
+                    Write-Log  "Arquivo já existe, preparando backup: $destPath"
+
+                    if (-not (Test-Path $obsoletoDir)) {
+                        New-Item -Path $obsoletoDir -ItemType Directory -Force | Out-Null
+                        (Get-Item $obsoletoDir).Attributes = 'Hidden'
+                        Write-Host "Pasta Obsoleto criada e ocultada: $obsoletoDir" -ForegroundColor Green
+                        Write-Log  "Pasta Obsoleto criada: $obsoletoDir"
+                    }
+
+                    $nameWithoutExt = [IO.Path]::GetFileNameWithoutExtension($filename)
+                    $extWithDot    = [IO.Path]::GetExtension($filename)
+                    $backupName    = Get-NextBackupName -baseName $nameWithoutExt -extension $extWithDot -directory $obsoletoDir
+                    $backupPath    = Join-Path $obsoletoDir $backupName
+
+                    Copy-Item -Path $destPath -Destination $backupPath -Force
+                    Write-Host "Backup criado: $backupPath" -ForegroundColor Green
+                    Write-Log  "Backup criado: $backupPath"
+                }
+
+                Copy-Item -Path $finalTemp -Destination $destPath -Force
+                Write-Host "✓ Arquivo salvo: $destPath" -ForegroundColor Green
+                Write-Log  "Arquivo salvo: $destPath"
+            }
+
+            Remove-Item $finalTemp -Force -ErrorAction SilentlyContinue
+            Read-Host "Pressione Enter para continuar"
+        }
+        '4' {
+            Set-Clipboard $filename
+            Write-Host "✓ Nome '$filename' copiado para clipboard" -ForegroundColor Green
+            Write-Log  "Nome copiado para clipboard: $filename"
+            Read-Host "Pressione Enter para continuar"
+        }
+        '5' {
+            $ext = [System.IO.Path]::GetExtension($filename).TrimStart('.')
+            if ($ext -ne 'json') {
+                Write-Host "Esta opção é específica para arquivos JSON." -ForegroundColor Yellow
+                Write-Log  "Tentativa de expandir JSON em arquivo não-JSON: $filename"
+            } else {
+                Validate-AndFix-Json -Path $tempFile
+                Expand-CustomJsonProject -JsonPath $tempFile -TargetRoot $targetFolder
+            }
+            Read-Host "Pressione Enter para continuar"
+        }
+        '6' {
+            $exit = $true
+            Write-Log "Usuário escolheu sair do menu."
+        }
+        default {
+            Write-Host "Opção inválida!" -ForegroundColor Red
+            Write-Log  "Opção inválida no menu: $choice"
+            Start-Sleep -Seconds 2
+        }
+    }
+} while (-not $exit)
+
+# ---------- Limpeza ----------
+
+Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+Write-Log "Sessão finalizada. Temp removido: $tempFile"
+Write-Host "Sessão finalizada." -ForegroundColor Cyan
+
+
+
+
+
+
+
+=========================PATCH 14================================
+
+=========================PATCH 15================================
+
+=========================PATCH 16================================
+
+=========================PATCH 17================================
+
+=========================PATCH 18================================
+
+=========================PATCH 19================================
+
+
+

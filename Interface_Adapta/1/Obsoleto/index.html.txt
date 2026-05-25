@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adapta ONE - Interface Multimodal</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+        h1 { color: #333; }
+        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        #output { background: #f9f9f9; padding: 10px; border-radius: 4px; min-height: 100px; max-height: 300px; overflow-y: auto; }
+        #video { width: 100%; max-width: 400px; border: 1px solid #ddd; border-radius: 4px; }
+        #audio-meter { width: 100%; height: 30px; background: #f0f0f0; border-radius: 4px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧠 Adapta ONE - Interface Multimodal</h1>
+        
+        <div class="section">
+            <h2>👁️ Captura de Tela</h2>
+            <button onclick="startScreenCapture()">Iniciar Captura</button>
+            <button onclick="stopScreenCapture()">Parar Captura</button>
+            <div id="screen-status">Aguardando...</div>
+        </div>
+
+        <div class="section">
+            <h2>👂 Áudio</h2>
+            <button onclick="startAudio()">Iniciar Áudio</button>
+            <button onclick="stopAudio()">Parar Áudio</button>
+            <div id="audio-meter"></div>
+            <div id="audio-status">Aguardando...</div>
+        </div>
+
+        <div class="section">
+            <h2>🎥 Vídeo</h2>
+            <video id="video" autoplay playsinline></video>
+            <button onclick="startVideo()">Iniciar Câmera</button>
+            <button onclick="stopVideo()">Parar Câmera</button>
+            <div id="video-status">Aguardando...</div>
+        </div>
+
+        <div class="section">
+            <h2>🧠 Saída da IA</h2>
+            <div id="output">Aguardando entrada...</div>
+        </div>
+    </div>
+
+    <script src="http://localhost:8000/capture-screen.js"></script>
+    <script src="http://localhost:8000/audio-listener.js"></script>
+    <script src="http://localhost:8000/interaction-handler.js"></script>
+    <script src="http://localhost:8000/sync-engine.js"></script>
+
+    <script>
+        // Funções de controle
+        function startScreenCapture() {
+            document.getElementById('screen-status').textContent = '✓ Captura iniciada';
+        }
+        function stopScreenCapture() {
+            document.getElementById('screen-status').textContent = '✗ Captura parada';
+        }
+        function startAudio() {
+            document.getElementById('audio-status').textContent = '✓ Áudio ativo';
+        }
+        function stopAudio() {
+            document.getElementById('audio-status').textContent = '✗ Áudio parado';
+        }
+        function startVideo() {
+            navigator.mediaDevices.getUserMedia({ video: true })
+                .then(stream => {
+                    document.getElementById('video').srcObject = stream;
+                    document.getElementById('video-status').textContent = '✓ Câmera ativa';
+                })
+                .catch(err => {
+                    document.getElementById('video-status').textContent = '✗ Erro: ' + err.message;
+                });
+        }
+        function stopVideo() {
+            const video = document.getElementById('video');
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                document.getElementById('video-status').textContent = '✗ Câmera parada';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+﻿[tool.poetry]
+name = "agente-python-fixer"
+version = "0.1.0"
+description = "Agente para correção de código Python"
+authors = ["Seu Nome <seu@email.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+openai = "^1.3.7"
+pydantic = "^2.5.0"
+pydantic-settings = "^2.1.0"
+python-dotenv = "^1.0.0"
+langchain = "^0.1.0"
+langchain-openai = "^0.1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

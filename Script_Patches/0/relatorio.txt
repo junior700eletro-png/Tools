@@ -1,0 +1,15 @@
+﻿DIAGNOSTICO DE BUFFER VS DISCO
+Data/Hora: 2026-05-21 00:46:36
+
+Arquivo de entrada: C:\Users\user\Desktop\Tools\Script_Patches\Fix_File_v2.ps1
+Arquivo temporario gravado: C:\Users\user\AppData\Local\Temp\wqspyk5n.eqf.ps1
+Relatorio TXT: C:\Users\user\Desktop\Tools\Script_Patches\relatorio.txt
+
+Tamanho em memoria: 8964 bytes
+Tamanho em disco:   8964 bytes
+SHA256 em memoria:  db4cc8e9cb8de2a002e57a88631957ad30fad3ed1ecbfe2ea0c32c7412984aad
+SHA256 em disco:    db4cc8e9cb8de2a002e57a88631957ad30fad3ed1ecbfe2ea0c32c7412984aad
+Hashes iguais:      True
+Bytes iguais:       True
+
+Nenhuma divergencia encontrada.

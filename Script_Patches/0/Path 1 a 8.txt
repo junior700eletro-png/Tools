@@ -1,0 +1,759 @@
+CRIAR ARQUIVOS DE PATCH :
+
+
+=====================PATCH 1=====================
+PRECISO MAIS UMA PEQUENA ALTERAÇÃO NO SCRIPT :  que ele consiga ler o nome do arquivo neste caso: 
+# meu_script.ps1 - Script de teste
+Write-Host "Hello"
+                                              
+não esta reconhecendo o nome do arquivo e gera o timestamp no nome
+
+Hoje a regex da primeira linha exige que a linha termine exatamente no nome do arquivo, por isso ela não reconhece quando tem “- Script de teste” depois.
+
+Basta relaxar a regex para aceitar qualquer coisa depois do nome. Troque apenas a linha marcada na função Extract-FirstLineFilename.
+
+Trecho ajustado de Extract-FirstLineFilename
+No script está assim:
+if ($firstLine -match '^#\s*(.+?\.\w+)\s*$') {
+    $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+    return $matches[1].Trim()
+}
+Substitua por:
+if ($firstLine -match '^#\s*([^\s]+\.\w+)') {
+    # Ex.: "# meu_script.ps1 - Script de teste"
+    #      captura "meu_script.ps1" antes do primeiro espaço
+    $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+    return $matches[1].Trim()
+}
+O que muda:
+
+Antes: exigia que a linha fosse só # meu_script.ps1 (nada depois).
+
+Agora: aceita # meu_script.ps1, # meu_script.ps1, # meu_script.ps1 - Script de teste, etc., capturando apenas meu_script.ps1.
+
+Com isso, esse cabeçalho:
+
+# meu_script.ps1 - Script de teste
+Write-Host "Hello"
+
+passa a ser reconhecido como nome de arquivo, a primeira linha é removida do conteúdo salvo, e ele não cai mais no timestamp.
+
+=====================PATCH 2=====================
+
+ok, só que se a primeira linha precisa ser preservada INTEIRA, caso eu queira mante-la no arquivo a ser gravado, do contrario o que se segue ao nome do arquivo sera perdido.
+Dá para preservar a linha inteira sem perder nada: em vez de remover a linha já “recortada”, removemos a linha original completa, e só usamos a regex para descobrir o nome.
+
+Você só precisa ajustar Extract-FirstLineFilename assim:
+function Extract-FirstLineFilename {
+    param(
+        [string]$Path,
+        [ref]$HeaderLineRemovedContent
+    )
+    try {
+        $allLines = Get-Content -Path $Path
+        if ($allLines.Count -gt 0) {
+            $firstLine = $allLines[0]
+
+            # Captura só o nome (primeira coisa tipo nome.ext), mas NÃO altera a linha
+            if ($firstLine -match '^#\s*([^\s]+\.\w+)') {
+                $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+                return $matches[1].Trim()
+            }
+        }
+    } catch {
+        Write-Warning "Erro ao ler primeira linha: $_"
+        Write-Log    "Erro ao ler primeira linha: $_"
+    }
+    return $null
+}
+E manter exatamente este trecho no fluxo da opção 3 (já está assim na sua versão):
+$finalContent = $content
+if ($headerFound) {
+    $resp = Read-Host "Adicionar primeira linha '# $filename' no topo do arquivo final? (S/N)"
+    if ($resp -eq 'S' -or $resp -eq 's') {
+        # Aqui você pode escolher: só "# nome.ext" OU a linha original inteira
+
+        # 1) Se quiser reconstituir só "# nome.ext":
+        $finalContent = "# $filename`n$finalContent"
+
+        # 2) Se preferir preservar a linha original inteira,
+        #    troque a linha acima por algo assim (guardando a original em outra variável):
+        # $finalContent = "$firstLineOriginal`n$finalContent"
+    }
+}
+Para não perder o “- Script de teste”, basta guardar a primeira linha original em outra variável no fluxo principal:
+
+Logo depois de ler o temp:
+$allLines = Get-Content $tempFile
+$firstLineOriginal = $allLines[0]
+$content = $allLines -join "`n"
+E usar $firstLineOriginal no lugar de "# $filename" se você quiser recolocar a linha inteira. Assim:
+
+Na detecção, usamos regex só para extrair o nome.
+
+No conteúdo que será salvo, removemos a primeira linha.
+
+Se você responder “S”, recolocamos a linha original completa, com “- Script de teste” e o que mais vier.
+
+=====================PATCH 3=====================
+
+Hoje ele ainda está reconstruindo a linha como `# $filename`, então tudo depois do nome se perde mesmo. O que você quer é:
+
+1. Usar a primeira linha **original** para recolocar no arquivo, se escolher “S”.
+2. Usar regex só para extrair o nome, sem mudar o texto da linha.
+
+Vou te passar o ajuste mínimo, passo a passo.
+
+***
+
+## 1. Guardar a primeira linha original no fluxo principal
+
+Logo depois de salvar e reler o temp, troque essa parte:
+
+```powershell
+# Conteúdo que será usado ao longo do fluxo (pode ter header removido)
+$content = Get-Content $tempFile -Raw -Encoding utf8
+```
+
+por esta:
+
+```powershell
+# Lê todas as linhas para poder preservar a primeira linha original se quiser
+$allLines = Get-Content $tempFile -Encoding utf8
+$firstLineOriginal = $null
+if ($allLines.Count -gt 0) {
+    $firstLineOriginal = $allLines[0]
+}
+$content = $allLines -join "`n"
+```
+
+Assim, `$firstLineOriginal` guarda exatamente:
+
+```powershell
+# meu_script.ps1 - Script de teste
+```
+
+sem cortes.
+
+***
+
+## 2. Ajustar Extract-FirstLineFilename para só extrair o nome
+
+Deixe a função assim (apenas confirmando):
+
+```powershell
+function Extract-FirstLineFilename {
+    param(
+        [string]$Path,
+        [ref]$HeaderLineRemovedContent
+    )
+    try {
+        $allLines = Get-Content -Path $Path
+        if ($allLines.Count -gt 0) {
+            $firstLine = $allLines[0]
+
+            # Captura só o nome (primeiro token tipo nome.ext) no comentário
+            if ($firstLine -match '^#\s*([^\s]+\.\w+)') {
+                $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+                return $matches[1].Trim()
+            }
+        }
+    } catch {
+        Write-Warning "Erro ao ler primeira linha: $_"
+        Write-Log    "Erro ao ler primeira linha: $_"
+    }
+    return $null
+}
+```
+
+Isso continua removendo a primeira linha do conteúdo em `$HeaderLineRemovedContent`, mas não mexe no texto original (que está em `$firstLineOriginal`).
+
+***
+
+## 3. Na opção 3, recolocar a linha **original inteira**
+
+No case `'3'` do `switch`, troque este trecho:
+
+```powershell
+$finalContent = $content
+if ($headerFound) {
+    $resp = Read-Host "Adicionar primeira linha '# $filename' no topo do arquivo final? (S/N)"
+    if ($resp -eq 'S' -or $resp -eq 's') {
+        $finalContent = "# $filename`n$finalContent"
+    }
+}
+```
+
+por este:
+
+```powershell
+$finalContent = $content
+if ($headerFound -and $firstLineOriginal) {
+    $resp = Read-Host "Adicionar a primeira linha original no topo do arquivo final? (S/N)"
+    if ($resp -eq 'S' -or $resp -eq 's') {
+        # Reinsere a linha original completa, ex:
+        # "# meu_script.ps1 - Script de teste"
+        $finalContent = "$firstLineOriginal`n$finalContent"
+    }
+}
+```
+
+Agora o comportamento fica:
+
+- Para descobrir o nome:
+  - Usa regex `^#\s*([^\s]+\.\w+)` e captura apenas `meu_script.ps1`.
+- Para o conteúdo:
+  - `$content` **não** tem a primeira linha.
+- Se você responder “S”:
+  - A primeira linha recolocada é exatamente `$firstLineOriginal`, com “- Script de teste” e o que mais vier.
+
+Isso elimina o corte do restante da linha e mantém seu cabeçalho intacto quando você decidir preservá‑lo.
+
+=====================PATCH 4=====================
+
+Para esse caso com `REM meu_script.bat`, precisamos ajustar a função que lê o nome da **primeira linha**, porque hoje ela só aceita comentário começando com `#`. [jhoneill.github](https://jhoneill.github.io/powershell/2021/04/11/regex2.html)
+
+Seu exemplo:
+
+```bat
+REM meu_script.bat
+@echo off
+echo Hello
+```
+
+***
+
+## Ajuste na leitura da primeira linha
+
+Na função `Extract-FirstLineFilename`, troque o `if` que faz o `-match` por um que aceite tanto `#` quanto `REM`, `//`, `;`, etc.
+
+Hoje está algo assim (já com o ajuste anterior do `#`):
+
+```powershell
+if ($firstLine -match '^#\s*([^\s]+\.\w+)') {
+    $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+    return $matches [jhoneill.github](https://jhoneill.github.io/powershell/2021/04/11/regex2.html).Trim()
+}
+```
+
+Substitua por:
+
+```powershell
+if ($firstLine -match '^\s*(?:#|REM\b|rem\b|//|;)?\s*([^\s]+\.\w+)') {
+    # Aceita, por exemplo:
+    #   # meu_script.ps1 - Script
+    #   REM meu_script.bat
+    #   // meu_script.py
+    #   ; meu_script.txt
+    $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+    return $matches [jhoneill.github](https://jhoneill.github.io/powershell/2021/04/11/regex2.html).Trim()
+}
+```
+
+O que essa regex faz:
+
+- `^\s*` — ignora espaços no começo da linha.
+- `(?:#|REM\b|rem\b|//|;)?` — aceita opcionalmente:
+  - `#`
+  - `REM` ou `rem`
+  - `//`
+  - `;`
+- `\s*` — ignora espaços depois do marcador.
+- `([^\s]+\.\w+)` — captura o primeiro “token” com formato `nome.ext` (sem espaço dentro). [learn.microsoft](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_regular_expressions?view=powershell-7.6)
+
+Com isso, estas primeiras linhas passam a ser reconhecidas:
+
+- `REM meu_script.bat`
+- `rem meu_script.bat`
+- `# meu_script.ps1 - Script de teste`
+- `// meu_script.py`
+- `; dados.txt`
+
+e o script vai:
+
+1. Extrair o nome (`meu_script.bat`, `meu_script.ps1`, etc.).
+2. Remover a primeira linha do conteúdo lógico.
+3. Usar esse nome sem cair no timestamp.
+
+=====================PATCH 5=====================
+
+Sim, faz sentido: se a primeira linha **não** bater com o padrão de header (`# nome.ext` ou similar), ela não deveria ser descartada do processo de detecção; o script deve procurar o nome em JSON / `@FILE:` usando **todo** o conteúdo, incluindo a primeira linha. [stackoverflow](https://stackoverflow.com/questions/51703919/powershell-regex-filename-matching)
+
+Hoje o fluxo ideal fica assim:
+
+1. Tenta extrair o nome só se a primeira linha for claramente um header.  
+2. Se não for header, não mexe no conteúdo e deixa a detecção de metadados trabalhar com tudo.
+
+Vou te mostrar como deixar isso explícito.
+
+***
+
+## 1. Ajustar `Extract-FirstLineFilename` para só agir em header “claro”
+
+Use a função assim:
+
+```powershell
+function Extract-FirstLineFilename {
+    param(
+        [string]$Path,
+        [ref]$HeaderLineRemovedContent
+    )
+    try {
+        $allLines = Get-Content -Path $Path
+        if ($allLines.Count -gt 0) {
+            $firstLine = $allLines[0]
+
+            # Header explícito de nome de arquivo em comentário da PRIMEIRA linha
+            # Aceita: "# meu_script.ps1 - texto", "REM meu_script.bat", "// nome.py", "; nome.txt"
+            if ($firstLine -match '^\s*(?:#|REM\b|rem\b|//|;)\s*([^\s]+\.\w+)') {
+                $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+                return $matches [stackoverflow](https://stackoverflow.com/questions/51703919/powershell-regex-filename-matching).Trim()
+            }
+        }
+    } catch {
+        Write-Warning "Erro ao ler primeira linha: $_"
+        Write-Log    "Erro ao ler primeira linha: $_"
+    }
+    return $null
+}
+```
+
+Repare em dois detalhes importantes:
+
+- O comentário precisa começar com um dos marcadores (`#`, `REM`, `//`, `;`).  
+- Se **não** bater com isso, a função devolve `$null` e **não mexe** em `$HeaderLineRemovedContent`. [jhoneill.github](https://jhoneill.github.io/powershell/2021/04/11/regex2.html)
+
+***
+
+## 2. No fluxo principal, não alterar `$content` quando não encontrar header
+
+Mantenha exatamente esse padrão:
+
+```powershell
+# $content já contém TODO o arquivo (incluindo a primeira linha)
+# vindo de: $content = $allLines -join "`n"
+
+$headerRemovedContent = ''
+$filename = Extract-FirstLineFilename -Path $tempFile -HeaderLineRemovedContent ([ref]$headerRemovedContent)
+
+$headerFound = $false
+if ($filename) {
+    $headerFound = $true
+    Write-Host "✓ Detectado na primeira linha: $filename" -ForegroundColor Green
+    Write-Log  "Nome detectado na primeira linha: $filename"
+
+    # Só aqui removemos a primeira linha do conteúdo lógico
+    if (-not [string]::IsNullOrWhiteSpace($headerRemovedContent)) {
+        $content = $headerRemovedContent
+    }
+} else {
+    Write-Host "❌ Não encontrado header de nome na primeira linha" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome na primeira linha; procurando em metadados."
+
+    # AQUI a busca de metadados usa $content INTEIRO, incluindo a primeira linha
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+Com isso:
+
+- Caso 1 – header claro na primeira linha:  
+  - `# meu_script.ps1 - Script` ou `REM meu_script.bat`  
+  → Nome vem da primeira linha, conteúdo lógico passa a ser “do 2º em diante”.
+
+- Caso 2 – primeira linha **não** é header claro:  
+  - `Write-Host "teste"`  
+  - `@FILE: meu_script.ps1` na segunda linha  
+  - `"filename": "meu_script.py"` em qualquer lugar  
+  → A função de header devolve `$null`, o conteúdo **não é alterado**, e `Get-FilenameFallbackWithTimestamp` procura:
+    - `"filename": "..."` em todo o texto (incluindo a linha 1).
+    - Depois `@FILE:` em qualquer linha (inclusive 1), pois `Extract-CommentMetadata` varre todo o `$content`. [dandraka](https://dandraka.com/2025/02/28/powershell-scan-a-file-with-regex-and-write-the-output/)
+
+Resultado: se a primeira linha não servir como header, ela entra normalmente na busca de `"filename"` e `@FILE:`, e nada é perdido.
+
+=====================VALIDAÇÃO (SO INFORMATIVO, SEM PATCH)=====================
+
+
+Ótimo saber que funcionou, bom trabalho em ir refinando o script passo a passo. [netwrix](https://netwrix.com/en/resources/blog/powershell-write-to-file/)
+
+Se depois você quiser dar o próximo upgrade (aceitar `-TargetFolder` para integrar com o menu do Explorer, ou melhorar ainda mais as heurísticas de extensão), é só dizer o que prefere atacar primeiro.
+
+
+=====================PATCH 6=====================
+
+Esse caso com `::` é específico de batch: `::` também é usado como comentário em `.bat`.  A nossa regex da primeira linha ainda não considera `::` como marcador de comentário, por isso ela não reconhece `:: meu_script.bat`. [stackoverflow](https://stackoverflow.com/questions/11269338/how-to-comment-out-add-comment-in-a-batch-cmd)
+
+Vamos ajustar isso.
+
+***
+
+## 1. Atualizar a detecção de header na primeira linha
+
+Na função `Extract-FirstLineFilename`, onde você tem algo assim:
+
+```powershell
+if ($firstLine -match '^\s*(?:#|REM\b|rem\b|//|;)\s*([^\s]+\.\w+)') {
+    $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+    return $matches [stackoverflow](https://stackoverflow.com/questions/11269338/how-to-comment-out-add-comment-in-a-batch-cmd).Trim()
+}
+```
+
+substitua por:
+
+```powershell
+if ($firstLine -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+    # Aceita, por exemplo:
+    #   # meu_script.ps1 - Script
+    #   REM meu_script.bat
+    #   :: meu_script.bat
+    #   // meu_script.py
+    #   ; dados.txt
+    $HeaderLineRemovedContent.Value = ($allLines | Select-Object -Skip 1) -join "`n"
+    return $matches [stackoverflow](https://stackoverflow.com/questions/11269338/how-to-comment-out-add-comment-in-a-batch-cmd).Trim()
+}
+```
+
+O que muda:
+
+- Adicionamos `|::` dentro do grupo de prefixos aceitos.  [stackoverflow](https://stackoverflow.com/questions/11269338/how-to-comment-out-add-comment-in-a-batch-cmd)
+- A regex continua:
+  - Permitindo espaços no início da linha.
+  - Exigindo que a primeira coisa significativa seja um desses marcadores de comentário.
+  - Capturando o primeiro token `nome.ext` depois disso.
+
+Assim, este caso passa a ser reconhecido como header:
+
+```bat
+:: meu_script.bat
+@echo off
+echo Hello
+```
+
+e o nome `meu_script.bat` será detectado na primeira linha, com a linha removida do conteúdo lógico (mas ainda disponível em `$firstLineOriginal` para você recolocar se quiser).
+
+=====================PATCH 7=====================
+
+
+Nesse caso o comportamento está coerente com o que o script faz hoje: ele só tenta pegar o nome na **primeira linha**; como a primeira linha é o shebang (`#!/usr/bin/python3`), ele não vê `# meu_script.py` como header e cai para o caminho de metadados/timestamp. [stackoverflow](https://stackoverflow.com/questions/6908143/should-i-put-shebang-in-python-scripts-and-what-form-should-it-take)
+
+Se você quiser que funcione nesse padrão:
+
+```python
+#!/usr/bin/python3
+# meu_script.py
+print("Hello")
+```
+
+temos duas opções:
+
+***
+
+## Opção A – Aceitar header também na segunda linha (mais flexível)
+
+Fluxo:
+
+1. Se a primeira linha for um shebang (`#!`), ignora como header.
+2. Tenta detectar nome na segunda linha se ela for um comentário com `# nome.ext`.
+
+Implementação simples:
+
+### 1) Guardar também a segunda linha no fluxo principal
+
+Logo após ler o temp:
+
+```powershell
+$allLines = Get-Content $tempFile -Encoding utf8
+$firstLineOriginal = $null
+$secondLineOriginal = $null
+
+if ($allLines.Count -gt 0) {
+    $firstLineOriginal = $allLines[0]
+}
+if ($allLines.Count -gt 1) {
+    $secondLineOriginal = $allLines [stackoverflow](https://stackoverflow.com/questions/6908143/should-i-put-shebang-in-python-scripts-and-what-form-should-it-take)
+}
+
+$content = $allLines -join "`n"
+```
+
+### 2) Nova função para header em primeira/segunda linha
+
+Substitua `Extract-FirstLineFilename` por esta versão que tenta linha 1 e, se for shebang, tenta linha 2:
+
+```powershell
+function Extract-HeaderFilename {
+    param(
+        [string[]]$AllLines,
+        [ref]$HeaderLineRemovedContent,
+        [ref]$HeaderLineIndex
+    )
+
+    $HeaderLineIndex.Value = -1
+
+    if (-not $AllLines -or $AllLines.Count -eq 0) {
+        return $null
+    }
+
+    # 1) Tenta primeira linha como header, desde que NÃO seja shebang
+    $line0 = $AllLines[0]
+    if ($line0 -notmatch '^\s*#!') {
+        if ($line0 -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $HeaderLineIndex.Value = 0
+            $HeaderLineRemovedContent.Value = ($AllLines | Select-Object -Skip 1) -join "`n"
+            return $matches [stackoverflow](https://stackoverflow.com/questions/6908143/should-i-put-shebang-in-python-scripts-and-what-form-should-it-take).Trim()
+        }
+    }
+
+    # 2) Se houver segunda linha, tenta ela como header
+    if ($AllLines.Count -gt 1) {
+        $line1 = $AllLines [stackoverflow](https://stackoverflow.com/questions/6908143/should-i-put-shebang-in-python-scripts-and-what-form-should-it-take)
+        if ($line1 -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $HeaderLineIndex.Value = 1
+            # Remove a linha 1 do conteúdo, preservando a linha 0 (shebang, por exemplo)
+            $HeaderLineRemovedContent.Value = @($AllLines[0]) + ($AllLines | Select-Object -Skip 2)
+            $HeaderLineRemovedContent.Value = $HeaderLineRemovedContent.Value -join "`n"
+            return $matches [stackoverflow](https://stackoverflow.com/questions/6908143/should-i-put-shebang-in-python-scripts-and-what-form-should-it-take).Trim()
+        }
+    }
+
+    return $null
+}
+```
+
+### 3) Ajustar o fluxo principal para usar o novo header
+
+Troque este trecho:
+
+```powershell
+$headerRemovedContent = ''
+$filename = Extract-FirstLineFilename -Path $tempFile -HeaderLineRemovedContent ([ref]$headerRemovedContent)
+
+$headerFound = $false
+if ($filename) {
+    ...
+} else {
+    ...
+}
+```
+
+por:
+
+```powershell
+$headerRemovedContent = ''
+$headerLineIndex = -1
+$filename = Extract-HeaderFilename -AllLines $allLines `
+                                   -HeaderLineRemovedContent ([ref]$headerRemovedContent) `
+                                   -HeaderLineIndex ([ref]$headerLineIndex)
+
+$headerFound = $false
+if ($filename) {
+    $headerFound = $true
+    Write-Host "✓ Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename" -ForegroundColor Green
+    Write-Log  "Header de nome detectado na linha $( $headerLineIndex + 1 ): $filename"
+
+    if (-not [string]::IsNullOrWhiteSpace($headerRemovedContent)) {
+        $content = $headerRemovedContent
+    }
+} else {
+    Write-Host "❌ Nenhum header de nome encontrado nas primeiras linhas" -ForegroundColor Yellow
+    Write-Log  "Nenhum header de nome; usando metadados/timestamp."
+    $filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+}
+```
+
+E na opção 3, mantenha a lógica de recolocar a **linha original** (primeira ou segunda, como você preferir; pode usar `$firstLineOriginal` ou `$secondLineOriginal` dependendo de `$headerLineIndex`).
+
+Com isso:
+
+- No seu exemplo Python:
+  - Linha 1 (`#!/usr/bin/python3`) é ignorada como header.
+  - Linha 2 (`# meu_script.py`) é interpretada como header de nome.
+  - Nome `meu_script.py` é detectado, a linha 2 é removida do conteúdo lógico, e a linha 1 (shebang) fica preservada no topo.
+
+***
+
+## Opção B – Deixar somente metadados cuidarem de casos assim
+
+Se você preferir manter a regra “header só na primeira linha” e não complicar, a alternativa é:
+
+- Para scripts com shebang, usar `# @FILE: meu_script.py` em qualquer linha, ou `"filename": "meu_script.py"` em um bloco JSON.
+- A lógica de `Get-FilenameFromMetadata` já pega esses casos. [github](https://github.com/rstudio/rstudio/issues/5643)
+
+Mas, como você claramente quer o padrão “segunda linha com `# nome.ext`”, a **Opção A** é a que atende exatamente seu uso.
+
+=====================PATCH 8=====================
+
+
+Dá para corrigir isso sem quebrar o resto: a ideia é, se **não** houve header na primeira linha, procurar por **qualquer** comentário com `nome.ext` (sem exigir `@FILE:`) em todas as linhas, antes de cair no timestamp. [forums.powershell](https://forums.powershell.org/t/regex-in-powershell-line-by-line-from-txt-file/15140)
+
+Vou ajustar a regra assim, mantendo a ordem:
+
+1. Tenta header na primeira linha (ou segunda, se você quiser manter a lógica com shebang).
+2. Se não achar header:
+   - Tenta `"filename": "..."` em JSON.
+   - Tenta **qualquer comentário** com `nome.ext` (`#`, `REM`, `::`, `//`, `;`) em qualquer linha.
+   - Só depois gera nome com timestamp.
+
+Você só precisa mexer em **duas coisas**: uma nova função de busca em comentários gerais e a função que resolve metadados.
+
+***
+
+## 1. Nova função: procurar `nome.ext` em qualquer comentário
+
+Adicione esta função (pode ficar perto de `Extract-CommentMetadata`):
+
+```powershell
+function Extract-AnyCommentFilename {
+    param([string]$Content)
+
+    # Varre todas as linhas, procurando qualquer comentário com algo tipo nome.ext
+    # Ex.:
+    #   # meu_script.py
+    #   REM meu_script.bat
+    #   :: meu_script.bat
+    #   // meu_script.ps1
+    #   ; dados.txt
+    $lines = $Content -split "`n"
+    $matchesList = @()
+
+    foreach ($line in $lines) {
+        if ($line -match '^\s*(?:#|REM\b|rem\b|//|;|::)\s*([^\s]+\.\w+)') {
+            $matchesList += $matches [forums.powershell](https://forums.powershell.org/t/regex-in-powershell-line-by-line-from-txt-file/15140).Trim()
+        }
+    }
+
+    return $matchesList
+}
+```
+
+Essa função é igual à de header, mas aplica em **todas** as linhas, não só na primeira. [jhoneill.github](https://jhoneill.github.io/powershell/2021/04/11/regex2.html)
+
+***
+
+## 2. Ajustar `Get-FilenameFromMetadata` para usar comentários “comuns”
+
+Agora vamos estender `Get-FilenameFromMetadata` para, depois de tentar JSON e `@FILE:`, tentar também qualquer comentário que contenha `nome.ext`.
+
+Substitua a função inteira por esta:
+
+```powershell
+function Get-FilenameFromMetadata {
+    param(
+        [string]$Content,
+        [switch]$Verbose
+    )
+
+    if ($Verbose) { Write-Host "Buscando metadata JSON (\"filename\")..." -ForegroundColor Yellow }
+    $fn = Extract-JsonMetadata $Content
+    if ($fn) {
+        if ($Verbose) { Write-Host "✓ JSON: $fn" -ForegroundColor Green }
+        Write-Log "Nome detectado via JSON: $fn"
+        return $fn
+    }
+
+    if ($Verbose) { Write-Host "Buscando @FILE nos comentários..." -ForegroundColor Yellow }
+    $allFromComments = Extract-CommentMetadata $Content
+    if ($allFromComments -and $allFromComments.Count -gt 0) {
+        $chosen = Select-FilenameFromList -Names $allFromComments
+        if ($chosen) {
+            if ($Verbose) { Write-Host "✓ Comentário (@FILE): $chosen" -ForegroundColor Green }
+            Write-Log "Nome selecionado via @FILE: $chosen"
+            return $chosen
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de @FILE." -ForegroundColor Yellow }
+        }
+    }
+
+    # NOVO: tentar qualquer comentário que contenha nome.ext
+    if ($Verbose) { Write-Host "Buscando nome em comentários gerais (#, REM, ::, //, ;)..." -ForegroundColor Yellow }
+    $allFromAnyComments = Extract-AnyCommentFilename $Content
+    if ($allFromAnyComments -and $allFromAnyComments.Count -gt 0) {
+        $chosen2 = Select-FilenameFromList -Names $allFromAnyComments
+        if ($chosen2) {
+            if ($Verbose) { Write-Host "✓ Comentário (genérico): $chosen2" -ForegroundColor Green }
+            Write-Log "Nome selecionado via comentário genérico: $chosen2"
+            return $chosen2
+        } else {
+            if ($Verbose) { Write-Host "Nenhum nome selecionado a partir de comentários genéricos." -ForegroundColor Yellow }
+        }
+    }
+
+    return $null
+}
+```
+
+Repare na ordem:
+
+1. `"filename"` em JSON.
+2. `@FILE:` (metadado explícito).
+3. Qualquer comentário comum com `nome.ext` (inclui `#`, `REM`, `::`, etc.). [reddit](https://www.reddit.com/r/PowerShell/comments/1e75ybw/how_to_search_one_txt_for_filenames_a_second_for/)
+
+***
+
+## 3. Fluxo principal continua igual
+
+No fluxo onde você chamou:
+
+```powershell
+$filename = Get-FilenameFallbackWithTimestamp -Content $content -Verbose
+```
+
+não precisa mudar: `Get-FilenameFallbackWithTimestamp` já faz:
+
+- Chama `Get-FilenameFromMetadata` (que agora inclui JSON, `@FILE:` e comentários comuns).
+- Se nada for encontrado, gera `script_YYYYMMDD_HHMMSS.ext`.
+
+Com esse ajuste, os casos passam a funcionar assim:
+
+### Python com shebang
+
+```python
+#!/usr/bin/python3
+# meu_script.py
+print("Hello")
+```
+
+- Não tem header na primeira linha.
+- Não tem `"filename"` nem `@FILE:`.
+- Mas tem um comentário `# meu_script.py`.  
+  → `Extract-AnyCommentFilename` acha `meu_script.py`, mostra menu se tiver mais de um e usa esse nome.
+
+### Batch com `REM` ou `::`
+
+```bat
+REM meu_script.bat
+@echo off
+echo Hello
+```
+
+ou
+
+```bat
+:: meu_script.bat
+@echo off
+echo Hello
+```
+
+- Pode ou não ser header (dependendo da função de header).
+- Mesmo que não trate como header, `Extract-AnyCommentFilename` acha `meu_script.bat` em comentários e usa o nome.
+
+Assim, você mantém:
+
+- Primeira linha como **header especial** quando quiser controlar remoção/inserção de linha.
+- Comentários em qualquer lugar como **fonte de nome** “comum”, sem a exigência de `@FILE:`.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

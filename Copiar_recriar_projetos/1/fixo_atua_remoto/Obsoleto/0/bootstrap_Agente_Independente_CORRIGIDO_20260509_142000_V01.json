@@ -1,0 +1,90 @@
+﻿{
+  "created_date": "2026-05-09 14:20:00",
+  "version": "1.0.0",
+  "project_name": "Agente_Independente",
+  "files": [
+    {
+      "path": "0/pyproject.toml",
+      "content": "[build-system]\nrequires = [\"setuptools>=61.0.0\", \"wheel\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\nname = \"agente-independente\"\nversion = \"0.1.0\"\ndescription = \"Agente independente para análise e correção de projetos Python\"\nreadme = \"README.md\"\nrequires-python = \">=3.8\"\ndependencies = [\n  \"click>=8.1.0\",\n]\n\n[project.scripts]\nagente = \"src.main:cli\"",
+      "size": 350
+    },
+    {
+      "path": "0/requirements.txt",
+      "content": "click>=8.1.0",
+      "size": 15
+    },
+    {
+      "path": "0/README.md",
+      "content": "# Agente Independente\n\nAgente autônomo para análise e correção de projetos Python baseada em regras.\n\n## Instalação\n\npip install -r requirements.txt\npip install -e .\n\n## Uso\n\nagente analyze /caminho/para/projeto\nagente fix /caminho/para/projeto\n\n## Testes\n\npytest",
+      "size": 250
+    },
+    {
+      "path": "0/src/__init__.py",
+      "content": "",
+      "size": 0
+    },
+    {
+      "path": "0/src/main.py",
+      "content": "import sys\nimport click\nfrom pathlib import Path\n\nsys.path.insert(0, str(Path(__file__).parent))\n\nfrom analyser import ProjectAnalyzer\nfrom fixer.agent import FixerAgent\n\n@click.group()\ndef cli():\n    \"\"\"CLI principal do Agente Independente.\"\"\"\n    pass\n\n@cli.command()\n@click.argument('path', type=click.Path(exists=True))\n@click.option('--json', is_flag=True)\ndef analyze(path, json_flag):\n    analyzer = ProjectAnalyzer(path)\n    issues = analyzer.analyze()\n    if json_flag:\n        import json\n        click.echo(json.dumps([vars(i) for i in issues], indent=2, ensure_ascii=False))\n    else:\n        for issue in issues:\n            click.echo(str(issue))\n\n@cli.command()\n@click.argument('path', type=click.Path(exists=True))\n@click.option('--dry-run', is_flag=True)\ndef fix(path, dry_run):\n    agent = FixerAgent(path)\n    if dry_run:\n        issues = agent.analyzer.analyze()\n        for i in issues:\n            click.echo(str(i))\n    else:\n        agent.fix()\n\nif __name__ == '__main__':\n    cli()",
+      "size": 900
+    },
+    {
+      "path": "0/src/analyser/__init__.py",
+      "content": "from .project_analyzer import ProjectAnalyzer\n\n__all__ = ['ProjectAnalyzer']",
+      "size": 60
+    },
+    {
+      "path": "0/src/analyser/project_analyzer.py",
+      "content": "import ast\nimport os\nfrom pathlib import Path\nfrom typing import List\n\nclass Issue:\n    def __init__(self, file_path: str, line: int, type_: str, message: str):\n        self.file_path = file_path\n        self.line = line\n        self.type = type_\n        self.message = message\n\n    def __str__(self):\n        if self.line > 0:\n            return f\"{self.file_path}:{self.line} [{self.type}] {self.message}\"\n        return f\"[{self.type}] {self.message}\"\n\nclass ProjectAnalyzer:\n    def __init__(self, project_root: str):\n        self.root = Path(project_root).resolve()\n\n    def analyze(self) -> List[Issue]:\n        issues = []\n        issues.extend(self._check_structure())\n        for py_file in self._find_python_files():\n            rel_path = py_file.relative_to(self.root).as_posix()\n            file_issues = self._analyze_python_file(py_file)\n            for i in file_issues:\n                i.file_path = rel_path\n                issues.append(i)\n        return issues\n\n    def _check_structure(self) -> List[Issue]:\n        issues = []\n        if not (self.root / \"src\").exists():\n            issues.append(Issue(\"\", 0, \"structure\", \"Diretório src/ ausente\"))\n        if not (self.root / \"tests\").exists():\n            issues.append(Issue(\"\", 0, \"structure\", \"Diretório tests/ ausente\"))\n        if not any(self.root.glob(\"pyproject.toml\")) and not any(self.root.glob(\"setup.py\")):\n            issues.append(Issue(\"\", 0, \"structure\", \"Arquivo de configuração de build ausente\"))\n        return issues\n\n    def _find_python_files(self) -> List[Path]:\n        return [\n            p for p in self.root.rglob(\"*.py\")\n            if 'venv' not in p.parts and '__pycache__' not in p.parts\n        ]\n\n    def _analyze_python_file(self, file_path: Path) -> List[Issue]:\n        issues = []\n        try:\n            source = file_path.read_text(encoding='utf-8')\n            tree = ast.parse(source)\n            lines = source.splitlines()\n            max_len = max((len(line) for line in lines), default=0)\n            if max_len > 79:\n                issues.append(Issue(file_path.name, 0, \"pep8\", f\"Linha muito longa (max {max_len} > 79)\"))\n            if not ast.get_docstring(tree):\n                issues.append(Issue(file_path.name, 0, \"docstring\", \"Docstring do módulo ausente\"))\n        except SyntaxError as e:\n            issues.append(Issue(file_path.name, e.lineno or 0, \"syntax\", str(e).splitlines()[0]))\n        return issues",
+      "size": 1800
+    },
+    {
+      "path": "0/src/fixer/__init__.py",
+      "content": "from .agent import FixerAgent\nfrom .core import PythonFixer",
+      "size": 60
+    },
+    {
+      "path": "0/src/fixer/agent.py",
+      "content": "from pathlib import Path\nfrom analyser.project_analyzer import ProjectAnalyzer, Issue\nfrom .core import PythonFixer\n\nclass FixerAgent:\n    def __init__(self, project_root: str):\n        self.root = Path(project_root).resolve()\n        self.analyzer = ProjectAnalyzer(str(self.root))\n        self.fixer = PythonFixer()\n\n    def fix(self):\n        issues = self.analyzer.analyze()\n        print(f\"Encontradas {len(issues)} issues para corrigir.\")\n        fixed_count = 0\n        for issue in issues:\n            if self._can_auto_fix(issue):\n                print(f\"Corrigindo: {issue}\")\n                if issue.file_path:\n                    file_path = self.root / issue.file_path\n                    if file_path.exists():\n                        self.fixer.fix_file(file_path, issue)\n                        fixed_count += 1\n        print(f\"Corrigidos {fixed_count} issues.\")\n\n    def _can_auto_fix(self, issue: Issue) -> bool:\n        return issue.type in ('debug', 'structure', 'pep8')",
+      "size": 700
+    },
+    {
+      "path": "0/src/fixer/core.py",
+      "content": "import ast\nfrom pathlib import Path\nfrom utils.helpers import create_backup\n\nclass PythonFixer:\n    def fix_file(self, file_path: Path, issue):\n        create_backup(file_path)\n        if issue.type == 'debug' and 'print()' in issue.message:\n            self._comment_print_line(file_path, issue.line)\n        self._validate_after_fix(file_path)\n\n    def _comment_print_line(self, file_path: Path, line_no: int):\n        try:\n            text = file_path.read_text(encoding='utf-8')\n            lines = text.splitlines(keepends=True)\n            if 0 < line_no <= len(lines):\n                line = lines[line_no - 1].lstrip('#').lstrip()\n                if 'print(' in line:\n                    lines[line_no - 1] = '# ' + line\n                    file_path.write_text(''.join(lines), encoding='utf-8')\n        except Exception as e:\n            print(f\"Erro ao fixar {file_path}: {e}\")\n\n    def _validate_after_fix(self, file_path: Path):\n        try:\n            with open(file_path, 'r', encoding='utf-8') as f:\n                compile(f.read(), str(file_path), 'exec')\n            print(f\"✓ {file_path.name} validado.\")\n        except SyntaxError as e:\n            print(f\"✗ Erro de sintaxe após fix em {file_path}: {e}\")",
+      "size": 900
+    },
+    {
+      "path": "0/src/utils/__init__.py",
+      "content": "",
+      "size": 0
+    },
+    {
+      "path": "0/src/utils/helpers.py",
+      "content": "import shutil\nfrom pathlib import Path\n\ndef create_backup(file_path: Path):\n    if file_path.exists():\n        backup_path = file_path.with_suffix(file_path.suffix + '.bak')\n        shutil.copy2(file_path, backup_path)\n        print(f\"Backup criado: {backup_path}\")",
+      "size": 200
+    },
+    {
+      "path": "0/tests/__init__.py",
+      "content": "",
+      "size": 0
+    },
+    {
+      "path": "0/tests/test_analyser.py",
+      "content": "import pytest\nimport sys\nfrom pathlib import Path\n\nsys.path.insert(0, str(Path(__file__).parent.parent / 'src'))\n\nfrom analyser.project_analyzer import ProjectAnalyzer, Issue\n\n@pytest.fixture\ndef sample_project(tmp_path):\n    (tmp_path / 'test.py').write_text(\"print('hello')\\nif __name__ == '__main__':\\n    pass\\n\")\n    return tmp_path\n\ndef test_missing_src(tmp_path):\n    analyzer = ProjectAnalyzer(tmp_path)\n    issues = analyzer.analyze()\n    assert any(i.type == 'structure' and 'src/' in i.message for i in issues)\n\ndef test_print_detection(sample_project):\n    analyzer = ProjectAnalyzer(sample_project)\n    issues = analyzer.analyze()\n    assert any('print()' in i.message for i in issues)",
+      "size": 600
+    },
+    {
+      "path": "0/tests/test_fixer.py",
+      "content": "import pytest\nimport sys\nfrom pathlib import Path\n\nsys.path.insert(0, str(Path(__file__).parent.parent / 'src'))\n\nfrom analyser.project_analyzer import ProjectAnalyzer\nfrom fixer.agent import FixerAgent\n\n@pytest.fixture\ndef project_with_print(tmp_path):\n    pyfile = tmp_path / 'debug.py'\n    pyfile.write_text(\"print('debug message')\\n\")\n    return tmp_path\n\ndef test_fix_print(project_with_print):\n    agent = FixerAgent(project_with_print)\n    agent.fix()\n    content = (project_with_print / 'debug.py').read_text()\n    assert '# print' in content",
+      "size": 500
+    },
+    {
+      "path": "0/test_agente.ps1",
+      "content": "# Teste do Agente Independente - CORRIGIDO\n\n$projDir = '0'\nSet-Location $projDir\n\nWrite-Host \"Verificando estrutura do projeto...\" -ForegroundColor Green\n\n$checks = @(\n    @{Path='pyproject.toml'; Name='pyproject.toml'},\n    @{Path='src'; Name='src/'},\n    @{Path='src/analyser'; Name='src/analyser/'},\n    @{Path='src/fixer'; Name='src/fixer/'},\n    @{Path='src/utils'; Name='src/utils/'},\n    @{Path='tests'; Name='tests/'}\n)\n\nforeach ($check in $checks) {\n    if (Test-Path $check.Path) {\n        Write-Host \"OK: $($check.Name)\" -ForegroundColor Green\n    } else {\n        Write-Warning \"Falta: $($check.Name)\"\n    }\n}\n\nWrite-Host \"Instalando dependências...\" -ForegroundColor Yellow\npip install -r requirements.txt\n\nWrite-Host \"Testando CLI...\" -ForegroundColor Yellow\npython -m src.main --help\n\nWrite-Host \"Análise de exemplo...\" -ForegroundColor Yellow\npython -m src.main analyze .\n\nWrite-Host \"Executando testes...\" -ForegroundColor Yellow\npip install pytest\npytest -v\n\nWrite-Host \"Teste concluído!\" -ForegroundColor Green",
+      "size": 1200
+    }
+  ],
+  "source_folder": "C:\Users\user\Desktop\Tools\Agente_Independente",
+  "ignore_mode": false,
+  "folders": ["0", "0/src", "0/src/analyser", "0/src/fixer", "0/src/utils", "0/tests"]
+}

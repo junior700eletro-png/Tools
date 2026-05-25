@@ -1,0 +1,9 @@
+﻿RELATORIO SHA256
+================
+Arquivo: Fix_File_v2.ps1
+Path: C:\Users\user\Desktop\Tools\Script_Patches\Fix_File_v2.ps1
+Tamanho: 8964 bytes
+Data: 2026-05-21 00:32:05
+
+SHA256 (minusculo): db4cc8e9cb8de2a002e57a88631957ad30fad3ed1ecbfe2ea0c32c7412984aad
+SHA256 (maiusculo):  DB4CC8E9CB8DE2A002E57A88631957AD30FAD3ED1ECBFE2EA0C32C7412984AAD

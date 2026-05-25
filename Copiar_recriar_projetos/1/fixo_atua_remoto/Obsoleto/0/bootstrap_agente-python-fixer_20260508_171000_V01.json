@@ -1,0 +1,31 @@
+﻿{
+  "created_date": "2026-05-08 17:10:00",
+  "version": "1.0.0",
+  "project_name": "agente-python-fixer",
+  "source_folder": "C:\\Users\\user\\Desktop\\Tools\\Agente_Independente",
+  "ignore_mode": false,
+  "structure": {
+    "0": {
+      "src": {
+        "analyzer": {
+          "__init__.py": "",
+          "project_analyzer.py": "import os\nimport ast\n\ndef analyze_project(root_dir):\n    python_files = []\n    issues = []\n    for dirpath, _, filenames in os.walk(root_dir):\n        for filename in filenames:\n            if filename.endswith('.py'):\n                filepath = os.path.join(dirpath, filename)\n                python_files.append(filepath)\n                try:\n                    with open(filepath, 'r', encoding='utf-8') as f:\n                        ast.parse(f.read(), filename=filepath)\n                except SyntaxError as e:\n                    issues.append(f'Syntax error in {filepath}: {e}')\n    return {\n        'total_python_files': len(python_files),\n        'syntax_issues': issues\n    }",
+          "pytest_runner.py": "import subprocess\n\ndef run_pytest(project_dir):\n    try:\n        result = subprocess.run(\n            ['pytest', project_dir, '-v', '--tb=short'],\n            capture_output=True,\n            text=True,\n            cwd=project_dir\n        )\n        return {\n            'returncode': result.returncode,\n            'passed': result.returncode == 0,\n            'stdout': result.stdout,\n            'stderr': result.stderr\n        }\n    except FileNotFoundError:\n        return {'error': 'pytest not found. Install with pip install pytest.'}\n    except Exception as e:\n        return {'error': str(e)}",
+          "linter_runner.py": "import subprocess\n\ndef run_linter(project_dir):\n    try:\n        result = subprocess.run(\n            ['flake8', project_dir],\n            capture_output=True,\n            text=True,\n            cwd=project_dir\n        )\n        output = result.stdout + result.stderr\n        return {\n            'returncode': result.returncode,\n            'clean': result.returncode == 0,\n            'output': output\n        }\n    except FileNotFoundError:\n        return {'error': 'flake8 not found. Install with pip install flake8.'}\n    except Exception as e:\n        return {'error': str(e)}",
+          "report_generator.py": "import json\nfrom datetime import datetime\n\ndef generate_report(analysis, test_results, lint_results):\n    report = {\n        'timestamp': datetime.now().isoformat(),\n        'project_analysis': analysis,\n        'test_results': test_results,\n        'lint_results': lint_results,\n        'summary': {\n            'syntax_issues': len(analysis.get('syntax_issues', [])),\n            'tests_passed': test_results.get('passed', False) if 'error' not in test_results else False,\n            'lint_clean': lint_results.get('clean', False) if 'error' not in lint_results else False\n        }\n    }\n    return report\n\ndef save_report(report, filepath='fixer_report.json'):\n    with open(filepath, 'w') as f:\n        json.dump(report, f, indent=2)"
+        },
+        "main.py": "#!/usr/bin/env python3\nimport os\nimport sys\nimport json\nfrom analyzer.project_analyzer import analyze_project\nfrom analyzer.pytest_runner import run_pytest\nfrom analyzer.linter_runner import run_linter\nfrom analyzer.report_generator import generate_report, save_report\n\ndef main(project_dir=None):\n    if project_dir is None:\n        project_dir = os.getcwd()\n    \n    print(f'Analyzing Python project in: {project_dir}')\n    \n    analysis = analyze_project(project_dir)\n    print('Project analysis complete.')\n    \n    test_results = run_pytest(project_dir)\n    print('Pytest execution complete.')\n    \n    lint_results = run_linter(project_dir)\n    print('Linter execution complete.')\n    \n    report = generate_report(analysis, test_results, lint_results)\n    \n    print(json.dumps(report, indent=2))\n    \n    save_report(report)\n    print('Report saved to fixer_report.json')\n\nif __name__ == '__main__':\n    if len(sys.argv) > 1:\n        main(sys.argv[1])\n    else:\n        main()"
+      }
+    },
+    "1": {
+      "src": {
+        "analyzer": {}
+      }
+    },
+    "2": {
+      "src": {
+        "analyzer": {}
+      }
+    }
+  }
+}
