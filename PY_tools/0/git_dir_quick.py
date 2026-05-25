@@ -1,119 +1,140 @@
 import sys
 from pathlib import Path
-
 from git import Repo
 
 
-def check_tkinter():
-    try:
-        import tkinter  # noqa: F401
-        return True
-    except ImportError:
-        print(
-            "AVISO: Tkinter nao esta disponivel.\n"
-            "A selecao de diretorio por janela nao estara disponivel.\n"
-            "Reinstale o Python com Tcl/Tk se quiser GUI."
+def ensure_gitignore(repo_dir: Path):
+    """Garante que o .gitignore existe e tem regras básicas"""
+    gitignore_path = repo_dir / ".gitignore"
+    
+    essential_rules = [
+        ".tmp.driveupload/",
+        "*.pyc",
+        "__pycache__/",
+        ".venv/",
+        "venv/",
+        "env/",
+        "*.log",
+        ".DS_Store",
+        "Thumbs.db",
+        "desktop.ini",
+        "*.tmp",
+        "*.temp",
+        ".cache/",
+        "node_modules/",
+    ]
+    
+    if gitignore_path.exists():
+        existing_rules = set(gitignore_path.read_text(encoding='utf-8').splitlines())
+        new_rules = [rule for rule in essential_rules if rule not in existing_rules]
+        
+        if new_rules:
+            print(f"Adicionando {len(new_rules)} regras ao .gitignore existente...")
+            with gitignore_path.open('a', encoding='utf-8') as f:
+                f.write('\n# Regras adicionadas automaticamente\n')
+                f.write('\n'.join(new_rules) + '\n')
+    else:
+        print("Criando .gitignore com regras essenciais...")
+        gitignore_path.write_text(
+            '# Arquivos temporarios e caches\n' +
+            '\n'.join(essential_rules) + '\n',
+            encoding='utf-8'
         )
-        return False
-
-
-def escolher_diretorio_gui(titulo: str, initial: Path | None = None) -> Path:
-    import tkinter as tk
-    from tkinter import filedialog
-
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-
-    dir_path = filedialog.askdirectory(
-        title=titulo,
-        initialdir=str(initial) if initial else None,
-    )
-    root.destroy()
-
-    if not dir_path:
-        print("Nenhum diretorio selecionado. Abortando.")
-        sys.exit(1)
-
-    return Path(dir_path)
 
 
 def main():
-    # 0) Verificar Tkinter
-    if not check_tkinter():
+    print("Script Git iniciado")
+    
+    # Recebe o diretório base como argumento
+    if len(sys.argv) < 2:
+        print("Uso: python git_dir_quick.py <diretorio_repositorio>")
         sys.exit(1)
-
-    # 1) Escolher o repositorio Git (pasta raiz do clone)
-    print("Selecione o DIRETORIO do repositorio Git (onde existe a pasta .git).")
-    repo_dir = escolher_diretorio_gui("Selecione o repositorio Git")
-
+    
+    repo_dir = Path(sys.argv[1])
+    print(f"Diretorio do repositorio: {repo_dir}")
+    
     try:
         repo = Repo(repo_dir)
+        print(f"Repositorio Git encontrado em: {repo_dir}")
     except Exception as e:
         print(f"Erro ao abrir repositorio Git em {repo_dir}: {e}")
-        print("Certifique-se de escolher a pasta raiz de um clone (que contenha .git).")
+        print("Certifique-se de que este eh um repositorio Git (.git existe).")
         sys.exit(1)
-
-    print(f"Repositorio selecionado: {repo_dir}")
-
-    # 2) Escolher a subpasta dentro desse repositorio a ser 'gitada'
-    print("\nAgora selecione o DIRETORIO interno a ser git add/commit/push (ex.: tools).")
-    target_dir = escolher_diretorio_gui(
-        "Selecione o diretorio a ser git add/commit/push",
-        initial=repo_dir
-    )
-
-    # Garantir que target_dir está dentro do repo_dir
+    
+    # Garantir gitignore
+    ensure_gitignore(repo_dir)
+    
+    # Verificar arquivos
+    print("\nVerificando arquivos a serem adicionados...")
+    
     try:
-        rel_dir = target_dir.relative_to(repo_dir)
-    except ValueError:
-        print(f"O diretorio alvo {target_dir} nao esta dentro de {repo_dir}.")
-        sys.exit(1)
-
-    print(f"Diretorio alvo: {rel_dir}")
-
-    if not target_dir.exists() or not target_dir.is_dir():
-        print(f"Diretorio alvo invalido: {target_dir}")
-        sys.exit(1)
-
-    # 3) git add desse diretorio
+        untracked = repo.untracked_files
+        modified = [item.a_path for item in repo.index.diff(None)]
+        
+        all_files = untracked + modified
+        
+        if not all_files:
+            print("Nenhum arquivo novo ou modificado.")
+            print("Repositorio ja esta sincronizado.")
+            input("\nPressione ENTER para sair...")
+            sys.exit(0)
+        
+        print(f"\nArquivos a serem adicionados ({len(all_files)}):")
+        for f in all_files[:20]:
+            print(f"  - {f}")
+        if len(all_files) > 20:
+            print(f"  ... e mais {len(all_files) - 20} arquivos")
+        
+        resposta = input("\nConfirma adicionar esses arquivos? (S/n): ").strip().lower()
+        if resposta == 'n':
+            print("Abortado pelo usuario.")
+            sys.exit(0)
+        
+    except Exception as e:
+        print(f"Aviso ao verificar status: {e}")
+    
+    # Git add .
     try:
-        repo.git.add(str(rel_dir))
-        print(f"git add {rel_dir}")
+        print("\nExecutando git add ...")
+        repo.git.add('.')
+        print("git add . executado com sucesso")
     except Exception as e:
         print(f"Erro ao executar git add: {e}")
         sys.exit(1)
-
-    # 4) Mensagem de commit
-    default_msg = f"Atualizar conteudo em {rel_dir}"
+    
+    # Commit
+    default_msg = "Atualizar repositorio"
     print(f"\nMensagem de commit padrao: {default_msg}")
     msg = input("Mensagem de commit (ENTER para usar padrao): ").strip() or default_msg
-
+    
     try:
+        print(f"\nCriando commit: {msg}")
         repo.index.commit(msg)
-        print("Commit criado.")
+        print("Commit criado com sucesso.")
     except Exception as e:
         print(f"Erro ao criar commit: {e}")
         sys.exit(1)
-
-    # 5) Descobrir branch atual e fazer push
+    
+    # Push
     try:
         branch_name = repo.active_branch.name
+        print(f"\nBranch atual: {branch_name}")
     except TypeError:
         print("Repositorio em estado detached HEAD. Nao vou fazer push automatico.")
         sys.exit(0)
-
+    
     try:
         origin = repo.remote(name="origin")
         print(f"Fazendo push para origin/{branch_name}...")
         origin.push(branch_name)
-        print("Push realizado com sucesso.")
+        print("\n=== Push realizado com sucesso! ===")
     except Exception as e:
         print(f"Erro ao fazer push: {e}")
-        print("Verifique se suas credenciais do Git estao configuradas nesta maquina.")
+        print("Verifique suas credenciais Git.")
         sys.exit(1)
-
-    print("\nTudo pronto: git add/commit/push executado para o diretorio selecionado.")
+    
+    print("\n=== Tudo pronto: git add/commit/push executado ===")
+    input("\nPressione ENTER para sair...")
 
 
 if __name__ == "__main__":

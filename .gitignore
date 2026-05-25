@@ -1,8 +1,14 @@
-﻿.tmp.driveupload/
+.tmp.driveupload/
 *.pyc
 __pycache__/
 .venv/
 venv/
+env/
 *.log
 .DS_Store
 Thumbs.db
+desktop.ini
+*.tmp
+*.temp
+.cache/
+node_modules/
