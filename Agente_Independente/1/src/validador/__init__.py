@@ -1,4 +1,4 @@
 ﻿# __init__.py
-from .validators import CodeValidator, ValidationResult
+from .guardrails import Guardrails, GuardrailResult
 
-__all__ = ["CodeValidator", "ValidationResult"]
+__all__ = ["Guardrails", "GuardrailResult"]
