@@ -1,0 +1,25 @@
+﻿{
+  "llm": {
+    "provider": "perplexity",
+    "model": "llama-3.1-sonar-large-128k-online",
+    "api_key_env": "PERPLEXITY_API_KEY",
+    "temperature": 0.2,
+    "max_tokens": 2000
+  },
+  "agent": {
+    "max_iterations": 3,
+    "auto_backup": true,
+    "verbose": true,
+    "mock_mode_if_no_key": true
+  },
+  "guardrails": {
+    "blocked_paths": [
+      "C:/Windows",
+      "C:/Program Files",
+      "C:/Program Files (x86)"
+    ],
+    "blocked_extensions": [".exe", ".dll", ".bat", ".cmd", ".ps1"],
+    "max_file_size_mb": 5,
+    "allow_network": false
+  }
+}
