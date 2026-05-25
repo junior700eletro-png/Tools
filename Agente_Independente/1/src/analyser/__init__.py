@@ -1,11 +1,4 @@
-﻿"""
-Módulo analyzer: análise de projetos Python.
-Exporta as classes principais.
-"""
+﻿# __init__.py
+from .analyzer import Analyzer, Issue, analyze_file
 
-from .project_analyzer import ProjectAnalyzer
-from .pytest_runner import PytestRunner
-from .linter_runner import LinterRunner
-from .report_generator import ReportGenerator
-
-__all__ = ['ProjectAnalyzer', 'PytestRunner', 'LinterRunner', 'ReportGenerator']
+__all__ = ["Analyzer", "Issue", "analyze_file"]
